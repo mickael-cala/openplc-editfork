@@ -17,7 +17,6 @@ import {
   getConversation,
   listConversations,
   renameConversation,
-  sendAiTelemetry,
   streamAiChat,
   streamAiCompletion,
   warmAi,
@@ -51,7 +50,6 @@ import {
   switchBranch,
 } from '@root/backend/editor/edge-version-control'
 import { ESIService } from '@root/backend/editor/ethercat'
-import { createDesktopCatalogTransport } from '@root/backend/editor/library-manager/desktop-catalog-transport'
 import { resolveBuildWorkspace } from '@root/backend/editor/project/cloud-build-workspace'
 import { describeRetrievedLibraries } from '@root/backend/editor/project/describe-retrieved-libraries'
 import {
@@ -69,7 +67,6 @@ import type {
   PlcControlResult,
 } from '@root/backend/shared/debug/types'
 import { parseESIDeviceFull } from '@root/backend/shared/ethercat/esi-parser-main'
-import { listPublicLibraries, PublicLibrarySchema } from '@root/backend/shared/library/public-catalog-client'
 import type { SnapshotMetadata } from '@root/backend/shared/project/project-snapshot-archive'
 import { PlcRuntimeState } from '@root/backend/shared/simulator/types'
 import { PLCProjectData } from '@root/backend/shared/types/PLC/open-plc'
@@ -296,11 +293,6 @@ class MainProcessBridge implements MainIpcModule {
   private packageManagerModule = new PackageManagerModule()
   // System-wide IEC 61131-3 library pool (bundled + user-installed)
   private libraryManagerModule = new LibraryManagerModule()
-  // Shared transport for public-catalog HTTP — re-used by the
-  // `catalog:list` handler so the library-manager-module's batch
-  // install path and the modal's browse path hit the same env-
-  // configured base URL.
-  private catalogTransport = createDesktopCatalogTransport()
   // ESI repository service for EtherCAT device descriptions
   private esiService = new ESIService()
 
@@ -1793,11 +1785,14 @@ class MainProcessBridge implements MainIpcModule {
   /**
    * Telemetry, refused unless the event is one this build knows — the name becomes an
    * analytics record, so an unchecked string could create an event name nobody can query out again.
+   *
+   * Stellaria: the event is validated as before, then DROPPED. The editor is an
+   * offline build — no analytics record ever leaves the machine (docs/STELLARIA-V3.md).
    */
   handleEdgeAiTelemetry = async (
     _event: IpcMainInvokeEvent,
     name: unknown,
-    data: unknown,
+    _data: unknown,
   ): Promise<EdgeAiResult<null>> => {
     const telemetryEvent = toAiTelemetryEvent(name)
 
@@ -1809,7 +1804,7 @@ class MainProcessBridge implements MainIpcModule {
       return MainProcessBridge.AI_BAD_REQUEST
     }
 
-    await sendAiTelemetry(telemetryEvent, MainProcessBridge.vcRecord(data))
+    logger.info(`[telemetry] dropped event '${telemetryEvent}' (offline build)`)
 
     return { ok: true, data: null }
   }
@@ -2005,33 +2000,22 @@ class MainProcessBridge implements MainIpcModule {
     stream.cancel()
   }
 
+  /**
+   * Stellaria: the public catalogue is disabled in the offline build — the
+   * handler answers a deterministic "unavailable" without touching the
+   * network, so the renderer's error path is exercised instead (docs/STELLARIA-V3.md).
+   */
   handleCatalogList = async (
     _event: IpcMainInvokeEvent,
-    args: ListPublicLibrariesArgs,
+    _args: ListPublicLibrariesArgs,
   ): Promise<{ success: true; data: ListPublicLibrariesResponse } | { success: false; error: string }> => {
-    try {
-      const data = await listPublicLibraries(this.catalogTransport, args ?? {})
-      return { success: true, data }
-    } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) }
-    }
+    return { success: false, error: 'The library catalogue is disabled in this build (offline).' }
   }
 
-  handleCatalogInstallMany = async (_event: IpcMainInvokeEvent, libraries: PublicLibrary[]) => {
-    if (!Array.isArray(libraries) || libraries.length === 0) {
-      return { results: [] }
-    }
-    const validLibraries = libraries.filter((row): row is PublicLibrary => PublicLibrarySchema.safeParse(row).success)
-    if (validLibraries.length === 0) {
-      return { results: [] }
-    }
-    const batch = await this.libraryManagerModule.installFromCatalog(validLibraries)
-    // Fire one change event for the whole batch — saves N renderer
-    // refreshes for an N-library install.
-    if (batch.results.some((r) => r.success)) {
-      this.mainWindow?.webContents.send('libraries:changed')
-    }
-    return batch
+  /** Stellaria: catalogue installs are disabled in the offline build. */
+  handleCatalogInstallMany = async (_event: IpcMainInvokeEvent, _libraries: PublicLibrary[]) => {
+    logger.info('[catalog] install-many refused (offline build)')
+    return { results: [] }
   }
   handleStoreRetrieveRecent = async () => {
     const pathToUserDataFolder = join(app.getPath('userData'), 'User')

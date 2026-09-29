@@ -393,12 +393,13 @@ describe('telemetry', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('chat_messge'))
   })
 
-  it('forwards an event it knows', async () => {
+  it('accepts an event it knows but drops it — offline build never sends telemetry', async () => {
     await expect(bridge.handleEdgeAiTelemetry({} as never, 'chat_message', { model: 'sonnet' })).resolves.toMatchObject(
       { ok: true },
     )
 
-    expect(telemetry).toHaveBeenCalledWith('chat_message', { model: 'sonnet' })
+    // Stellaria: the event is validated, then dropped; nothing reaches the network.
+    expect(telemetry).not.toHaveBeenCalled()
     expect(logger.warn).not.toHaveBeenCalled()
   })
 })

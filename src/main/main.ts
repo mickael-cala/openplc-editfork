@@ -10,7 +10,6 @@ import { isWebUrl } from '@root/backend/editor/utils/is-web-url'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import Installer from 'electron-devtools-installer'
 import log from 'electron-log'
-import { autoUpdater } from 'electron-updater'
 import { enableMapSet } from 'immer'
 import { homedir, platform, release } from 'os'
 import { join, resolve } from 'path'
@@ -34,13 +33,9 @@ import { store } from './modules/store'
 
 enableMapSet()
 
-class AppUpdater {
-  constructor() {
-    log.transports.file.level = 'info'
-    autoUpdater.logger = log
-    void autoUpdater.checkForUpdatesAndNotify()
-  }
-}
+// Stellaria: auto-update disabled — the editor must run 100 % offline
+// (docs/STELLARIA-V3.md, milestone J1). electron-updater was removed; if
+// updates are ever reintroduced they must be opt-in and offline-capable.
 
 Menu.setApplicationMenu(null)
 
@@ -391,8 +386,7 @@ const createMainWindow = async () => {
   } as unknown as MainIpcModuleConstructor)
   mainIpcModule.setupMainIpcListener()
 
-  // Remove this if your app does not use auto updates;
-  new AppUpdater()
+  // Stellaria: AppUpdater removed — no auto-update in the offline build.
 }
 
 // Disable GPU Acceleration for Windows 7;
