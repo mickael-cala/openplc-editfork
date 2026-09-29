@@ -101,6 +101,25 @@ Emplacements identifiés à traiter, par étapes :
   part, `avr8js`), `THIRD-PARTY.md`, mentions Autonomy Logic/marques,
   identité Stellaria (palette, crédits « Programmé par Mickaël CALA »).
 
+## Le simulateur : décision proposée
+
+Pas de simulateur in-process (suppression d'`avr8js` / `SimulatorModule` /
+`SIMULATOR_CAPABILITIES` en J2, conformément à la stratégie). À la place, le
+mode « simulation » = **runtime v3 réel en local, couche matérielle `blank`,
+piloté par le backend Go** (`openplc-go-backend`, ADR-002) : l'éditeur s'y
+connecte comme à n'importe quelle cible v3 (`127.0.0.1`), et tout le flux
+(compile → upload `.st` → start/stop → debug Modbus TCP FC 0x41..0x45)
+emprunte le seul chemin v3 — fidélité totale, rien à maintenir en double.
+
+À prévoir côté éditeur (jalon J2/J3) :
+- entrée de device fixe « Runtime local (blank) » résolvant vers
+  `RUNTIME_V3_CAPABILITIES`, hôte `127.0.0.1`, port Modbus libre ;
+- spawn/contrôle du process backend Go (le backend supervise déjà le
+  runtime : start/stop, chien de garde) ;
+- vigilance : protocoles activés seulement après un start réussi (sinon
+  pas de canal Modbus → pas de debug) ; sous Windows, arrêter le runtime
+  avant toute recompilation (binaire verrouillé, ERR-032 côté backend).
+
 ## Hors périmètre
 
 Pas de reprise du webserver (backend Go), pas de compilateur (c'est
