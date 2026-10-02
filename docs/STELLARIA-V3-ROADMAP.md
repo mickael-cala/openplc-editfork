@@ -143,7 +143,7 @@ Ordre imposé par le risque : d'abord ce qui **empêche** de tester (D1), puis c
 |---|---|---|---|
 | J2.1 | ~~Ne plus dériver v4/Arduino/simulateur dans le résolveur partagé~~ — **abandonné** : le défaut v4 vit dans la surface partagée, où il est **porteur côté web**, et depuis J2.2 aucune cible livrée n'emprunte ce chemin. Le risque résiduel (une entrée ajoutée sans bloc) est couvert par le test garde-fou de J2.2 | — | `jest …/available-boards-capabilities.test.ts` : 3 tests verts, dont « toute cible livrée déclare un bloc `capabilities` » |
 | J2.2 | **Corriger D1** : recopier `capabilities` depuis `hals.json` — **FAIT** (`dc836980`, 2026-10-02) | `src/backend/editor/hardware/hardware-module.ts:276` (+ le champ `capabilities` au schéma d'entrée, `types.ts:63`) | **nouveau** test `src/backend/editor/hardware/__tests__/available-boards-capabilities.test.ts` : **2 tests verts avec**, **2 rouges sans** (mesuré, `git stash` de la seule ligne) |
-| J2.3 | Réduire `hals.json` à la seule entrée v3 (retirer Simulator, Runtime v4) | `src/backend/shared/firmware/hals.json` | `npx jest src/backend/shared/firmware src/backend/shared/hardware` ; `npm run cli -- packages list` ne liste plus qu'une cible |
+| J2.3 | Réduire `hals.json` à la seule entrée v3 — **FAIT** (2026-10-02) : Simulator et Runtime v4 retirés (153 → 44 lignes, JSON revalidé) | `src/backend/shared/firmware/hals.json` | suite complète en 4 shards : les seules suites rouges (`arduino-cli-config`, `edge-project-upload`, `stats-table`, `cloud-project-data`, `cloud-build-workspace`, `debug-map-path.handler`) le sont **aussi sans ce changement** — vérifié en stashant (3 suites, 8 tests), ce sont des défauts de test **Windows** préexistants (séparateurs `/` en dur, timeout 5 s sur un test de 1000 fichiers). Aucune suite ne casse à cause du catalogue |
 | J2.4 | Court-circuiter les bundles v4 : plus de `composeRuntimeV4Bundle` ni de `firmware-bundle` atteignables | `src/backend/shared/compile/pipeline.ts` (étapes 4a, 4c), `src/middleware/shared/utils/library/compose-runtime-v4-bundle.ts` | `pipeline-runtime-v3.test.ts` étendu : un projet v3 n'appelle **ni** `uploadRuntimeV4` **ni** `installArduinoCore` |
 | J2.5 | Retirer le simulateur in-process (`avr8js`, `SimulatorModule`, `src/backend/shared/simulator/`) | `package.json:67`, `src/main/modules/ipc/main.ts`, `src/backend/shared/simulator/` | `npx tsc --noEmit` ; `npm run validate:arch` |
 | J2.6 | Retirer VPP (catalogue local compris) et les écrans de bus non servis | `src/backend/editor/package-manager/`, `src/backend/shared/utils/vpp/`, écrans `ethercat`/`opcua`/`s7` | `npx eslint "./src/**/*.{ts,tsx}"` + `npx jest src/backend/editor` |
@@ -419,3 +419,21 @@ Playwright (aucun workflow CI ne le lance ici) :
 - Références dépôt runtime : `ERR-061` (flux éditeur vérifié), `ERR-062` (capacités),
   `ERR-063`/`WS-108` (table de debug de la cible), `ERR-064` (sentinelle), `ERR-066`
   (Phase 4), `ERR-067` (ordre/tampon), `WS-096`..`WS-098` (routes servies).
+
+
+- **J2.3 (2026-10-02)** — `hals.json` réduit à `OpenPLC Runtime v3` ; suite complète rejouée en 4 shards
+  (`jest --shard=n/4 --maxWorkers=3`, la machine n'a que 4 cœurs et un run complet dépasse 10 min) :
+  ~508 suites, ~10 400 tests, **6 suites rouges dont les 12 tests échouent à l'identique sur l'arbre propre**
+  (vérifié par `git stash` sur 6 suites) — ce sont des défauts de test Windows, sans rapport avec le catalogue :
+
+  | Suite rouge | Cause |
+  |---|---|
+  | `backend/editor/services/user-service/data/__tests__/arduino-cli-config.test.ts` | attentes `/home/user/.config/...` contre `\home\user\.config\...` |
+  | `frontend/components/_molecules/stats-table/__tests__/stats-table.test.tsx` | 2 tests, instable ici (passe dans un run, échoue dans un autre) |
+  | `backend/editor/project/__tests__/cloud-project-data.test.ts` | `startsWith(root + '/')` en dur, Windows renvoie `\` |
+  | `backend/editor/project/__tests__/cloud-build-workspace.test.ts` | idem |
+  | `main/modules/ipc/__tests__/debug-map-path.handler.test.ts` | 1 test, même famille (chemin) |
+  | `backend/editor/edge-project-upload/__tests__/edge-project-upload.test.ts` | timeout 5 s : le test crée 1000 fichiers, trop lent sous Windows |
+
+  Conséquence : « suite verte » n'est pas atteignable telle quelle sur ce poste ; ce sont les 6 suites à réparer
+  (petit lot séparé, hors périmètre J2) avant de se servir de la suite locale comme porte.
