@@ -639,6 +639,22 @@ describe('buildActiveIndexSet', () => {
       const { activeIndexes } = buildActiveIndexSet(state, allLeaves, null)
       expect(activeIndexes).toEqual([5])
     })
+
+    /**
+     * A forced key the index map does not know contributes no index, so its
+     * value can never be read back: the display shows the force marker and a
+     * stale value, with nothing anywhere saying why. Pinned because this is the
+     * shape of "I forced it and nothing moved" — the force service now logs the
+     * same condition at force time.
+     */
+    it('contributes no index when the index map does not know the forced key', () => {
+      const forced = new Map([['Main:UNKNOWN', { value: 1 }]])
+      const state = makeState({ debugForcedVariables: forced, debugVariableIndexes: new Map() })
+
+      const { activeIndexes } = buildActiveIndexSet(state, new Map(), null)
+
+      expect(activeIndexes).toEqual([])
+    })
   })
 
   describe('source-visible variables (ST/IL)', () => {

@@ -441,6 +441,11 @@ Playwright (aucun workflow CI ne le lance ici) :
 
 ### 4.7 Pièges connus (déjà payés une fois)
 
+- **Ne jamais reecrire `debugForcedVariables` sur un minuteur.** Ce que le poller surveille pour
+  invalider son cache d'index doit changer a l'action de l'utilisateur, pas a l'horloge : une
+  ecriture periodique le fait reconstruire sans arret et **les valeurs affichees cessent de suivre**
+  (valeur du panneau ET oscilloscope figes) alors que la cible, elle, repond correctement. N'ecrire
+  que sur changement reel (regression du 2026-10-02, corrigee en `5376ba720`).
 - **Le preload n'a plus a etre copie** (corrige le 2026-10-02 : l'application prend le premier
   fichier qui existe, `dist/main/preload.js` d'abord, et son journal dit lequel) ; ne **pas**
   definir `NODE_ENV=development` ; `firstWindow()` rend le splash.
@@ -706,3 +711,13 @@ status` propre dans les trois depots.
   backend : c'est ce que l'editeur MONTRE d'un forcage a true (valeur du panneau, mise en evidence de
   l'echelle, oscilloscope). Prochain sprint : fermer cette boucle d'affichage, la sonde servant de
   reference.
+- **2026-10-02, sprint 1 « affichage du forcage » : clos cote code.** Rapport de `@micka` : « affichage
+  valeur et oscilloscope pas ok » quand un forcage a true est pose. Cause trouvee et corrigee : le
+  rafraichissement du registre (P2) reecrivait `debugForcedVariables` toutes les 2 s, ce qui invalidait
+  en continu le cache des index a interroger -- les valeurs ne se mettaient plus a jour. Ce qui a ete
+  etabli au passage, et qui restera vrai : la sonde `debug:force-probe` lit la cible (reference), le
+  filtre de polling inclut bien les variables forcees et celles tracees (tests existants), et
+  l'oscilloscope lit **les memes cartes** que le panneau -- il n'y avait donc pas deux defauts mais un
+  seul. Ajoute : le cas « variable forcee dont l'index est inconnu » (le panneau montre la marque et une
+  valeur figee, sans rien dire) est desormais verrouille par un test. Reste : la confirmation visuelle de
+  `@micka`.
