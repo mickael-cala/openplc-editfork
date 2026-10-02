@@ -56,6 +56,12 @@ const BoardInfoSchema = z.object({
   // the resolver does its own structural checks at runtime.  Zod here
   // just guards against shape drift in `hals.json`.
   debug: z.any().optional(),
+  // Capability block declared by the catalogue entry (debugger transports,
+  // servers, address producers). Typed as the map's own field rather than
+  // `z.any()`: nothing parses this schema at runtime (the loader imports the
+  // JSON and casts), and `resolveTargetCapabilities` fills in whatever an entry
+  // leaves out, so the loose type is honest about what a manifest may declare.
+  capabilities: z.custom<Partial<TargetCapabilities>>().optional(),
   // Tracking metadata — not present in shipped hals.json today; optional
   // so downstream entries that do carry them still validate.
   updatedAt: z.number().optional(),

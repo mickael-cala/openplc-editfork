@@ -274,6 +274,13 @@ class HardwareModule {
                 .filter(Boolean) ?? [],
           },
           ...(boardData.debug ? { debug: boardData.debug } : {}),
+          // The capability block next to it is not decoration:
+          // `resolveTargetCapabilities` reads `debuggerTransports` from here.
+          // Dropping it left every built-in target on the Runtime v4 profile
+          // (`websocket`), so Runtime v3's only channel — Modbus TCP — was
+          // discarded and the resolver described no debug link at all
+          // (ERR-062). The VPP path below copies it for the same reason.
+          ...(boardData.capabilities ? { capabilities: boardData.capabilities } : {}),
         })
       })
     }
