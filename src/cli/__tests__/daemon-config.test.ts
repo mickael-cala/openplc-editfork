@@ -7,7 +7,7 @@
  * "Malformed daemon config". The file arm is the one that works; stdin stays
  * the fallback for POSIX.
  */
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -41,6 +41,9 @@ describe('daemon config hand-off', () => {
 
     expect(readConfigFile(path)).toContain('"password"')
     expect(existsSync(path)).toBe(false)
+    // The test's own scratch directory is not the code's to clean, and a suite
+    // that leaves one behind per run is a suite that fills a CI runner's /tmp.
+    rmSync(dir, { recursive: true, force: true })
   })
 
   it('refuses a config that is missing a field the daemon needs', () => {
