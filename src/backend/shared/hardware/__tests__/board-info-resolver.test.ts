@@ -10,7 +10,12 @@ import {
 } from '../board-info-resolver'
 
 const SOURCES_DIR = '/fake/resources/sources'
-const PKG_PATH = '/fake/user-data/packages/com.openplc.arduino'
+// VPP package paths go through `packageRelative`, which resolves them. A fixture
+// written POSIX-style is drive-relative on Windows (`join('/fake/user-data')` ->
+// `\fake\user-data`) while the resolver returns a drive-rooted path
+// (`C:\fake\user-data`), so the two only agree once the fixture is canonical.
+const USER_DATA_DIR = resolve('/fake/user-data')
+const PKG_PATH = join(USER_DATA_DIR, 'packages', 'com.openplc.arduino')
 
 // Editor-style adapters used by these tests.  Real editor passes the
 // same shape (filesystem-backed path joins); web will pass its own
@@ -531,7 +536,10 @@ describe('BoardInfoResolver', () => {
 
     it('finds a board in the second installed package when the first does not have it', () => {
       const a = makePkg({ packageId: 'com.openplc.arduino', devices: ['arduino-mega'] })
-      const b = makePkg({ packageId: 'com.openplc.espressif', path: '/fake/user-data/packages/com.openplc.espressif' })
+      const b = makePkg({
+        packageId: 'com.openplc.espressif',
+        path: join(USER_DATA_DIR, 'packages', 'com.openplc.espressif'),
+      })
       const pm = makePackageManager([a, b], {
         'com.openplc.arduino': makeManifest(),
         'com.openplc.espressif': makeManifest({
