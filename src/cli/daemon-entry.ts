@@ -1,16 +1,46 @@
 /**
- * Daemon bootstrap: read the config line from stdin, then serve.
+ * Daemon bootstrap: read the config, then serve.
  *
- * Config arrives on stdin rather than argv because it carries the runtime
- * password, and argv is readable by any process on the machine via `ps`.
+ * The config carries the runtime password, so it never travels in argv — that
+ * is readable by any process on the machine via `ps`. It arrives either as a
+ * file whose PATH the parent put in `OPENPLC_CLI_DAEMON_CONFIG`, or on stdin.
+ *
+ * The file is the arm that works on Windows: an Electron main process started
+ * there does not receive a piped stdin at all (measured — `process.stdin` just
+ * ends, with no data), so the stdin handshake alone made `debug open` answer
+ * "Malformed daemon config" on every Windows machine. stdin stays the fallback
+ * so POSIX keeps working unchanged.
  */
+
+import { readFileSync, unlinkSync } from 'node:fs'
 
 import { app } from 'electron'
 
 import { type DaemonConfig, runDaemon } from './session/daemon-main'
 
-export async function runDaemonFromStdin(): Promise<void> {
-  const raw = await readFirstLine()
+/** Where the parent left the config, when it passed one by file. */
+export function configFileFrom(env: NodeJS.ProcessEnv): string | undefined {
+  const path = env.OPENPLC_CLI_DAEMON_CONFIG
+  return path !== undefined && path.trim() !== '' ? path : undefined
+}
+
+/**
+ * Read the config file and remove it: the password lives in it, and it has
+ * served its purpose the moment it is in memory.
+ */
+export function readConfigFile(path: string): string {
+  const raw = readFileSync(path, 'utf8')
+  try {
+    unlinkSync(path)
+  } catch {
+    // Best effort — the parent also unlinks on child exit.
+  }
+  return raw
+}
+
+export async function runDaemonFromConfig(): Promise<void> {
+  const configPath = configFileFrom(process.env)
+  const raw = configPath === undefined ? await readFirstLine() : readConfigFile(configPath)
   const config = readConfig(raw)
   if (!config) {
     // Written and awaited before exiting: piped stdout is async, and `app.exit`
@@ -42,8 +72,8 @@ function readFirstLine(): Promise<string> {
   })
 }
 
-/** Validate the config instead of trusting the pipe. */
-function readConfig(line: string): DaemonConfig | undefined {
+/** Validate the config instead of trusting the hand-off. */
+export function readConfig(line: string): DaemonConfig | undefined {
   let parsed: unknown
   try {
     parsed = JSON.parse(line)

@@ -28,10 +28,17 @@ import {
 } from '@root/frontend/utils/debug-parser'
 import { walkDebugResponse } from '@root/frontend/utils/debug-response-walker'
 import {
+  declarationPathOf,
+  functionBlockInstancePaths,
+  projectV3Declarations,
+} from '@root/frontend/utils/debug-v3-projection'
+import {
   buildDebugVariableTreeMap,
   debugMapToEntries,
   deriveVariableIndexMap,
 } from '@root/frontend/utils/debugger-session'
+import type { SystemLibrary } from '@root/middleware/shared/ports/library-types'
+import type { PLCInstance, PLCPou } from '@root/middleware/shared/ports/types'
 import type { TargetEndian } from '@root/frontend/utils/endian'
 import { lookupBaseType } from '@root/frontend/utils/iec-types-registry'
 import { encodeForceValue } from '@root/frontend/utils/variable-sizes'
@@ -66,6 +73,19 @@ export function debugMapPath(projectPath: string, boardTarget: string): string {
 
 export type LoadDebugIndexResult = { success: true; index: DebugVariableIndex } | { success: false; error: string }
 
+export interface DebugVariableIndexOptions {
+  /**
+   * Set for a target that indexes its **own** table (Runtime v3 over Modbus
+   * TCP): addresses become each declaration's ORDINAL, with composites opaque,
+   * instead of STruC++'s packed `(arr << 16) | elem` leaf addresses.
+   *
+   * The same projection the GUI applies (`debug-v3-projection.ts`): a CLI that
+   * indexed the map its own way would send positions the target answers from a
+   * different table.
+   */
+  indexesByOrdinal?: boolean
+}
+
 /**
  * Read and index the debug map produced by the last compile for this target.
  *
@@ -73,7 +93,11 @@ export type LoadDebugIndexResult = { success: true; index: DebugVariableIndex } 
  * case, and it is reported as such rather than as a parse failure — the two
  * have completely different fixes.
  */
-export async function loadDebugIndex(projectPath: string, boardTarget: string): Promise<LoadDebugIndexResult> {
+export async function loadDebugIndex(
+  projectPath: string,
+  boardTarget: string,
+  options: DebugVariableIndexOptions = {},
+): Promise<LoadDebugIndexResult> {
   const path = debugMapPath(projectPath, boardTarget)
   let raw: string
   try {
@@ -86,7 +110,67 @@ export async function loadDebugIndex(projectPath: string, boardTarget: string): 
   }
   const map = parseDebugMap(raw)
   if (!map) return { success: false, error: `Malformed or unsupported debug map at ${path}` }
-  return { success: true, index: indexDebugMap(map) }
+  return { success: true, index: indexDebugMap(map, options) }
+}
+
+/**
+ * Ordinal indexing: one entry per declaration the target lists, in its order.
+ *
+ * A composite is addressable as a WHOLE — the target's table holds one entry for
+ * an array and none for a function-block instance — while its members are not,
+ * which is exactly what the tree walk would have minted an address for.
+ */
+function indexV3DebugMap(
+  map: DebugMap,
+  pous: PLCPou[],
+  instances: PLCInstance[],
+  systemLibraries: SystemLibrary[],
+): DebugVariableIndex {
+  const functionBlockInstances = functionBlockInstancePaths(pous, instances, systemLibraries)
+  const declarations = projectV3Declarations(map, { functionBlockInstances })
+
+  const all: ResolvedVariable[] = []
+  const byName = new Map<string, ResolvedVariable>()
+  const byIndex = new Map<number, ResolvedVariable>()
+
+  for (const entry of declarations) {
+    const resolved: ResolvedVariable = {
+      arr: 0,
+      elem: entry.index,
+      type: entry.type,
+      size: entry.size,
+      index: entry.index,
+      name: compositeKeyOf(entry.declaration, instances),
+    }
+    all.push(resolved)
+    // The composite key is what a person types; the map's own path stays
+    // reachable so a caller that read `debug-map.json` is not guessing either.
+    for (const alias of [resolved.name, entry.declaration]) {
+      if (!byName.has(alias.toUpperCase())) byName.set(alias.toUpperCase(), resolved)
+    }
+    if (!byIndex.has(resolved.index)) byIndex.set(resolved.index, resolved)
+  }
+
+  // Say what the target cannot address, rather than letting `main:ton1.q` look
+  // like a variable that never existed.
+  const dropped = new Set<string>()
+  for (const leaf of map.leaves) {
+    const declaration = declarationPathOf(leaf.path)
+    if (functionBlockInstances.has(declaration)) dropped.add(declaration)
+  }
+  const warnings = dropped.size
+    ? [`${dropped.size} function-block instance(s) are not addressable on this target: ${[...dropped].join(', ')}`]
+    : []
+
+  return { md5: map.md5, all, byName, byIndex, warnings }
+}
+
+/** `INSTANCE0.LED` + the instance list -> `main:led`, the key a user types. */
+function compositeKeyOf(declaration: string, instances: PLCInstance[]): string {
+  const [instanceName, ...members] = declaration.split('.')
+  const instance = instances.find((candidate) => candidate.name.toUpperCase() === instanceName.toUpperCase())
+  if (!instance || members.length === 0) return declaration
+  return `${instance.program}:${members.join('.').toLowerCase()}`
 }
 
 /**
@@ -106,7 +190,7 @@ export async function loadDebugIndex(projectPath: string, boardTarget: string): 
  * compiler, never from the stored project model, which can drift from the
  * compiled layout.
  */
-export function indexDebugMap(map: DebugMap): DebugVariableIndex {
+export function indexDebugMap(map: DebugMap, options: DebugVariableIndexOptions = {}): DebugVariableIndex {
   const leafInfo = buildLeafInfoMap(map)
   const byPackedIndex = new Map<number, DebugLeafInfo>()
   for (const leaf of map.leaves) {
@@ -127,6 +211,14 @@ export function indexDebugMap(map: DebugMap): DebugVariableIndex {
   // The editor's own tree walk, off the hydrated store — same POUs, instances,
   // datatypes and system libraries the GUI passes.
   const state = openPLCStoreBase.getState()
+  if (options.indexesByOrdinal) {
+    return indexV3DebugMap(
+      map,
+      state.project.data.pous,
+      state.project.data.configurations.resource.instances,
+      state.libraries.system,
+    )
+  }
   const { treeMap, warnings } = buildDebugVariableTreeMap(
     state.project.data.pous,
     state.project.data.configurations.resource.instances,

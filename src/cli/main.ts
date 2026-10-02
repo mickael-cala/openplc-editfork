@@ -36,7 +36,7 @@ import { type DebugContext, runDebug } from './commands/debug'
 import { runDevices } from './commands/devices'
 import { runInstallCli } from './commands/install-cli'
 import { runPackages } from './commands/packages'
-import { runDaemonFromStdin } from './daemon-entry'
+import { runDaemonFromConfig } from './daemon-entry'
 import { ErrorCode, ExitCode, type ExitCodeValue } from './exit-codes'
 import { createProcessReporter, Reporter } from './output'
 import { SessionRegistry } from './session/registry'
@@ -340,7 +340,7 @@ async function main(): Promise<void> {
   // OPENPLC_USER_DATA and we align to it here.
   if (isDaemon) {
     alignUserDataWithEditor(process.env.OPENPLC_USER_DATA || undefined)
-    await runDaemonFromStdin()
+    await runDaemonFromConfig()
     return
   }
 

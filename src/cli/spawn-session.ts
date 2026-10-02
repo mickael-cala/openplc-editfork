@@ -14,6 +14,10 @@
  */
 
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import {
   SPAWN_FAILURE_CODES,
@@ -56,6 +60,32 @@ export interface SpawnDependencies {
 
 const HANDSHAKE_TIMEOUT_MS = 120_000
 
+/** How long a config file may sit unread before it is considered abandoned. */
+const STALE_CONFIG_MS = 60 * 60 * 1000
+
+/**
+ * Remove config files no daemon ever read.
+ *
+ * They carry the runtime password, so one that is left behind is a secret left
+ * on disk; a daemon that boots normally deletes its own within seconds.
+ * Best-effort: a directory we cannot read is not a reason to refuse a session.
+ */
+/** Prefix of the hand-off files, so pruning recognises its own. */
+const CONFIG_PREFIX = 'openplc-daemon-'
+
+function pruneStaleConfigFiles(): void {
+  try {
+    const cutoff = Date.now() - STALE_CONFIG_MS
+    for (const name of readdirSync(tmpdir())) {
+      if (!name.startsWith(CONFIG_PREFIX) || !name.endsWith('.config.json')) continue
+      const path = join(tmpdir(), name)
+      if (statSync(path).mtimeMs < cutoff) rmSync(path, { force: true })
+    }
+  } catch {
+    // An unreadable temp directory is not a reason to refuse a session.
+  }
+}
+
 export function createSessionSpawner(deps: SpawnDependencies) {
   return async function spawnSession(options: SpawnSessionOptions): Promise<SpawnSessionResult> {
     if (options.uploadIfNeeded) {
@@ -75,14 +105,33 @@ export function createSessionSpawner(deps: SpawnDependencies) {
       idleTimeoutMs: options.idleTimeoutMs,
     }
 
-    // Credentials go over stdin, not argv: argv is world-readable in `ps`.
-    // userData is only a directory path (not a secret), so the env is fine and
-    // avoids threading it through the stdin config schema; the daemon reads it
-    // in its boot branch to align onto the same installed-VPP directory.
+    // Credentials never go through argv: argv is world-readable in `ps`. They
+    // travel in a config FILE whose PATH goes in the env — a path is not a
+    // secret, and this is the only hand-off that works on Windows, where an
+    // Electron main process does not receive a piped stdin (the daemon's stdin
+    // read comes back empty, which used to surface as "Malformed daemon
+    // config" on every `debug open`).
+    //
+    // Two things this file must NOT be, both learned the hard way: unlinked by
+    // an exit handler here (on Windows `electron.exe` re-launches itself, so the
+    // process spawned below exits at once and the daemon still booting got
+    // ENOENT), and kept inside the session registry — that directory is swept,
+    // and anything in it that is not a session record is deleted as garbage
+    // (`registry.ts`), which took the config with it.
+    //
+    // The DAEMON unlinks it as it reads it; abandoned ones are pruned below.
+    pruneStaleConfigFiles()
+    const configPath = join(tmpdir(), `openplc-daemon-${randomUUID()}.config.json`)
+    writeFileSync(configPath, JSON.stringify(config), { encoding: 'utf8', mode: 0o600 })
     const child = spawn(deps.execPath, [...deps.execArgs, '--cli-daemon'], {
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, OPENPLC_CLI_DAEMON: '1', OPENPLC_USER_DATA: deps.userData },
+      env: {
+        ...process.env,
+        OPENPLC_CLI_DAEMON: '1',
+        OPENPLC_USER_DATA: deps.userData,
+        OPENPLC_CLI_DAEMON_CONFIG: configPath,
+      },
     })
 
     // A daemon that exits before reading its config closes this pipe, and the

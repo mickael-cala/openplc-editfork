@@ -52,7 +52,15 @@ export type OpenSessionResult =
 export async function openDebugSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
   const progress = options.onProgress ?? (() => undefined)
 
-  const indexResult = await loadDebugIndex(options.projectPath, options.target)
+  const boards = openPLCStoreBase.getState().deviceAvailableOptions.availableBoards
+  const boardInfo: BoardInfo | undefined = boards.get(options.target)
+  // Which table the addresses belong to is a fact about the TARGET, and it has
+  // to be settled before the map is indexed: a Modbus TCP target (Runtime v3)
+  // indexes its own declaration table, where the map's leaf addresses mean
+  // nothing (see `debug-v3-projection.ts`).
+  const indexesByOrdinal = resolveTargetCapabilities(boardInfo).debuggerTransports.includes('modbus-tcp')
+
+  const indexResult = await loadDebugIndex(options.projectPath, options.target, { indexesByOrdinal })
   if (!indexResult.success) return { success: false, code: 'not-compiled', error: indexResult.error }
   const index = indexResult.index
   // The tree walk reports variables it could not resolve (unknown datatypes,
@@ -60,8 +68,6 @@ export async function openDebugSession(options: OpenSessionOptions): Promise<Ope
   // that simply does not exist.
   for (const warning of index.warnings) progress(`warning: ${warning}`)
 
-  const boards = openPLCStoreBase.getState().deviceAvailableOptions.availableBoards
-  const boardInfo: BoardInfo | undefined = boards.get(options.target)
   if (!boardInfo) {
     return {
       success: false,

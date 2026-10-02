@@ -139,6 +139,16 @@ Conséquence pour l'option B : la projection est **correcte sans FB utilisateur*
 la session échouera de toute façon sur le compte. À porter dans `ERRATA.md` du dépôt runtime
 (`ERR-nnn`) : c'est un défaut de `plcbuild`, pas de l'éditeur.
 
+**D5 — `openplc-cli debug force` meurt en silence (mesure du 2026-10-02).**
+
+Toutes les formes echouent pareil — `debug force main:led TRUE`, `debug force --var main:led
+--value TRUE`, `debug force main:secondes 42` : aucune sortie, aucun JSON, code de sortie -1
+(processus tue). Un `read` a **plusieurs** noms tombe dans le meme trou, alors que `read <nom>`,
+`list-vars`, `list`, `open` et `upload` fonctionnent. C'est donc la lecture/ecriture de valeur
+et le multi-nom qui sont en cause, **pas l'indexation** (qui est verifiee). A reparer avant de
+se servir du forcage par nom depuis le CLI ; en attendant, le forcage reste possible depuis
+l'IHM et par `POST /api/force`.
+
 ### 1.3 État de J1 (livré) et de l'environnement
 
 - J1 est livré sur cette branche : `dbd397cb9` (auto-update retiré, télémétrie IA droppée,
@@ -503,3 +513,21 @@ Playwright (aucun workflow CI ne le lance ici) :
   `ticks` **en premier** et la carte est `TICKS, DEMARRER, LED, CLIGNOTE, SECONDES` — soit l'ordre
   exact de `core/POUS.h` cote cible. Les deux espaces coincident des lors qu'ils partent du meme
   source **transpile** ; l'« ecart d'ordre » initial venait bien de la methode de comparaison.
+
+- **J3-b (2026-10-02)** — le CLI indexe desormais comme la GUI : `loadDebugIndex(... ,
+  { indexesByOrdinal })` / `indexDebugMap` projettent la carte sur la table de la cible
+  (`projectV3Declarations`), les cles deviennent les noms que l'on tape (`main:led`) et les
+  composites restent opaques ; les instances de FB non adressables sont annoncees en avertissement.
+  **Defaut CLI corrige au passage** : sur Windows un process principal Electron ne recoit pas
+  stdin (flux vide), donc la poignee de main du demon (`debug open`) repondait toujours
+  « Malformed daemon config » ; la config passe maintenant par un fichier temporaire dont seul
+  le CHEMIN voyage en environnement (le mot de passe ne va pas dans `argv`), et le fichier ne doit
+  pas vivre dans le repertoire du registre, qui elague tout ce qui n'est pas une session.
+  **Verifie de bout en bout** contre le backend Go + le runtime reels : `upload` (compilation sur
+  la cible), `debug open` (session enregistree, empreinte `93f2074a...` = celle de la carte),
+  `list-vars` (5 variables dans l'ordre de `core/POUS.h` : ticks, demarrer, led, clignote,
+  secondes) et `read main:secondes` -> **2092**, la valeur vive de la cible. `force` : voir D5.
+- **Nettoyage (2026-10-02)** : session de debug fermee (`debug close --all`), backend et runtime
+  arretes, ports 502/43628/8080/8443 liberes ; le repertoire temoin
+  `C:\Users\micka\gh\d2-probe` et les fixtures `st_files/d2_*.st` du depot runtime sont **effaces**,
+  et `core/` y a ete recompile sur `pascal_test.st` (etat du depot).
