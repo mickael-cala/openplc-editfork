@@ -168,7 +168,7 @@ Ordre imposé par le risque : d'abord ce qui **empêche** de tester (D1), puis c
 | # | Tâche | Fichiers | Preuve d'acceptation |
 |---|---|---|---|
 | J4.0 | **Mesurer D2** — **FAIT** (2026-10-02, `npm run debug:index`) : scalaires = listes identiques, composites = comptes divergents (5 vs 3 sur un tableau, `TON1` absent de la table cible) | `scripts/debug-index-order.ts` | sortie de la sonde sur `program-transpiled.st` (5/5 identiques) et `program-array.st` (5 vs 3) ; les deux côtés construits depuis le **même** `.st` |
-| J4.1 | Trancher D2 (ADR) : **(A)** la cible déploie les composites (`plcbuild` énumère les membres de FB/STRUCT — travail runtime) ; **(B)** l'éditeur replie ses feuilles à la granularité déclaration pour la cible v3 ; **(C)** extension `EXT` : la cible publie sa table (`index → nom/type/taille`) et l'éditeur construit son arbre dessus | `docs/STELLARIA-VISION.md`, `docs/DECISIONS.md` du dépôt runtime | ADR + la mesure de J4.0 en pièce jointe |
+| J4.1 | Trancher D2 — **TRANCHÉE le 2026-10-02** (`@micka`) : **(B) tout de suite** (l'éditeur replie ses feuilles à la granularité « déclaration », comptes alignés, composites opaques) **avec (C) comme cible** (la cible publie sa table `index → nom/type/taille` ; ADR côté runtime à écrire). **(A) écartée** : travail runtime le plus lourd, et il faudrait y rejouer les dispositions de FB des bibliothèques | (B) : `src/frontend/utils/debug-v3-projection.ts` + `useDebugSession.ts:96` ; (C) : `docs/DECISIONS.md` du dépôt runtime | (B) cœur **fait** : `projectV3DebugEntries` + 11 tests, dont les deux cas mesurés (scalaires 5/5, tableau → LED/ARR/N renumérotés) ; restent le calcul des instances de FB et le branchement |
 | J4.2 | Corriger `P2` (afficher un forçage venu d'ailleurs) selon l'option retenue | `src/frontend/utils/debug-polling-filter.ts:75`, `hooks/use-debug-value.ts`, `services/debug-force-variable.ts`, `_atoms/graphical-editor/debug-value-badge.tsx` | recette § 4.5 étapes 4-6 : la variable apparaît « forcée » **sans action** de l'utilisateur ; relâcher remet l'affichage d'aplomb |
 | J4.3 | Garder le forçage **par adresse** (`%QX/%QW/%MW/%MD/%ML`, entrées en lecture seule) tel quel | `src/backend/editor/modbus/modbus-client.ts:322` (`setVariable`) | § 4.5 étape 7 : écrire `%QX0.0` par adresse, relire par Modbus (FC1) |
 
@@ -389,7 +389,7 @@ Playwright (aucun workflow CI ne le lance ici) :
 | # | Décision | Impact | Défaut proposé |
 |---|---|---|---|
 | D-0 | **Parité de surface avec openplc-web** | **tranchée le 2026-10-02 : rupture** (`@micka`) — sans elle, tout retrait dans `src/backend/shared` (à commencer par `hals.json`) était un miroir de plus, et `Autonomy-Logic/openplc-web` n'est même pas accessible publiquement. L'amont `Autonomy-Logic/openplc-editor` reste suivi **en lecture seule** (`npm run upstream:triage`, `docs/STELLARIA-VISION.md` § 4) | — |
-| D-a | Espace d'index de debug v3 : option (A) table par l'éditeur, (B) extension `EXT` de la cible, (C) convention « une entrée par déclaration » | fiabilité du forçage par nom ; périmètre runtime | **(B) tenue pour la cible, (C) acceptée en repli** : la cible est déjà la source de vérité (`WS-108`), l'extension supprime toute duplication |
+| D-a | Espace d'index de debug v3 — **tranchée le 2026-10-02** : (B) maintenant, (C) comme cible ; (A) écartée. Preuve de la décision : `docs/STELLARIA-V3-ROADMAP.md` § D2 (mesures J4.0) | fiabilité du forçage par nom ; périmètre runtime (C) | — |
 | D-b | Sort de STruC++ pour la cible v3 | poids d'installation, source de `debug-map.json`, prérequis de J6 | **conserver tant que D-a n'est pas tranchée** |
 | D-c | VPP : retrait complet ou conservation d'un format de paquet local | J2.6, écrans Modbus VPP | retrait, une seule cible décrite dans `hals.json` |
 
@@ -448,3 +448,16 @@ Playwright (aucun workflow CI ne le lance ici) :
   Au passage : pour la cible v3, le pipeline n'écrit **rien** sur disque (`<projet>/build/
   <cible>/src/` reste vide), donc `openplc-cli debug open` n'a pas de `debug-map.json` à lire
   — le chemin debug du CLI est inutilisable en v3 aujourd'hui (à traiter en J3).
+
+- **Nettoyage du poste (2026-10-02)** : le PLC (pid 17800) et le backend Go (pid 15672), laissés en
+  marche par la session précédente, ont été arrêtés **dans l'ordre documenté** — `POST /api/stop`
+  (`{"status":"stopped"}`), puis arrêt du backend ; ports 502, 43628, 8080 et 8443 libérés, aucun
+  `openplc`/`electron` résiduel. `core/` a été recompilé proprement sur `st_files/pascal_test.st`
+  (`Compilation finished successfully!`, `VAR_COUNT 8`) — le verrou sur `plc.dll` venait du runtime
+  en marche, pas d'un défaut.
+- **Option B, incrément 1 (2026-10-02)** : `src/frontend/utils/debug-v3-projection.ts` —
+  `declarationPathOf` (feuille → déclaration) et `projectV3DebugEntries` (une entrée par déclaration,
+  **index = ordinal**, instances de FB écartées). 11 tests, adossés aux listes réellement écrites par
+  `plcbuild`. Restent : le calcul des instances de FB depuis le projet, le branchement dans
+  `useDebugSession.ts:96` (et `src/cli/debug/variables.ts:133`), et la persistance des artefacts v3
+  (`<projet>/build/<cible>/src/`) sans laquelle le chemin debug du CLI reste sans `debug-map.json`.
