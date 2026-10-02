@@ -164,23 +164,46 @@ export function declarationCompositeKey(
   return `${program.name}:${variable.name}`
 }
 
+/** What the backend's registry contributes to the forced-variables map. */
+export interface ExternalForcesState {
+  /** The store's next `debugForcedVariables`. */
+  forced: Map<string, boolean>
+  /** The keys THIS registry put there, so the next refresh can retire them. */
+  external: Set<string>
+}
+
 /**
- * Mark the variables the BACKEND forced, on top of the editor's own.
+ * Apply the BACKEND's force registry (WS-109) on top of the editor's own forces.
  *
- * `current` is the store's `debugForcedVariables`; `forces` is the registry the
- * backend published (WS-109); `indexToKey` maps the target's ordinals to the
- * composite keys the tree uses. An index with no key (a composite the editor
- * cannot address) is dropped rather than guessed at.
+ * `current` is the store's `debugForcedVariables`; `previousExternal` is what
+ * the LAST refresh contributed; `forces` is the registry as it stands now;
+ * `indexToKey` maps the target's ordinals to the composite keys the tree uses.
+ *
+ * A refresh has to do both halves, which is the whole point of tracking
+ * `previousExternal`: a force released from the web interface disappears from
+ * the registry, and the mark we added for it must go with it — while a force the
+ * EDITOR made never came from the registry and must survive, because the editor
+ * forces the target directly and the backend never hears about it.
+ *
+ * An index with no key (a composite the editor cannot address, or a registry
+ * from a different program) is dropped rather than guessed at.
  */
-export function mergeExternalForces(
+export function applyExternalForces(
   current: ReadonlyMap<string, boolean>,
+  previousExternal: ReadonlySet<string>,
   forces: ReadonlyArray<{ index: number; type: string; value: string }>,
   indexToKey: ReadonlyMap<number, string>,
-): Map<string, boolean> {
-  const next = new Map(current)
+): ExternalForcesState {
+  const forced = new Map(current)
+  for (const key of previousExternal) forced.delete(key)
+
+  const external = new Set<string>()
   for (const force of forces) {
     const key = indexToKey.get(force.index)
-    if (key !== undefined) next.set(key, true)
+    if (key === undefined) continue
+    forced.set(key, true)
+    external.add(key)
   }
-  return next
+
+  return { forced, external }
 }

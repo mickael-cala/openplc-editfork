@@ -8,10 +8,10 @@ import type { SystemLibrary } from '../../../middleware/shared/ports/library-typ
 import type { PLCInstance, PLCPou } from '../../../middleware/shared/ports/types'
 import type { DebugMap } from '../debug-parser'
 import {
+  applyExternalForces,
   declarationCompositeKey,
   declarationPathOf,
   functionBlockInstancePaths,
-  mergeExternalForces,
   projectV3DebugEntries,
 } from '../debug-v3-projection'
 
@@ -157,9 +157,9 @@ describe('functionBlockInstancePaths', () => {
     ]
 
     expect([...functionBlockInstancePaths(pous, [], [tonLibrary])]).toEqual([])
-    expect([...functionBlockInstancePaths(pous, [{ name: 'other', program: 'absent', task: 't' }], [tonLibrary])]).toEqual(
-      [],
-    )
+    expect([
+      ...functionBlockInstancePaths(pous, [{ name: 'other', program: 'absent', task: 't' }], [tonLibrary]),
+    ]).toEqual([])
     expect([...functionBlockInstancePaths(pous, instances, [tonLibrary])]).toEqual(['INSTANCE0.TON1'])
   })
 })
@@ -169,7 +169,13 @@ describe('declarationCompositeKey', () => {
     ({
       name,
       pouType: 'program',
-      interface: { variables: variables.map((variable) => ({ name: variable, class: 'local', type: { definition: 'base-type', value: 'BOOL' } })) },
+      interface: {
+        variables: variables.map((variable) => ({
+          name: variable,
+          class: 'local',
+          type: { definition: 'base-type', value: 'BOOL' },
+        })),
+      },
     }) as unknown as PLCPou
 
   it('maps a declaration onto the composite key, in the tree casing', () => {
@@ -196,7 +202,7 @@ describe('declarationCompositeKey', () => {
   })
 })
 
-describe('mergeExternalForces', () => {
+describe('applyExternalForces', () => {
   it('marks the backend-forced variables, keeps the editor own, drops unknown indexes', () => {
     const current = new Map([['main:ticks', true]])
     const forces = [
@@ -205,11 +211,32 @@ describe('mergeExternalForces', () => {
     ]
     const indexToKey = new Map([[1, 'main:led']])
 
-    const merged = mergeExternalForces(current, forces, indexToKey)
+    const { forced, external } = applyExternalForces(current, new Set(), forces, indexToKey)
 
-    expect(merged.get('main:ticks')).toBe(true)
-    expect(merged.get('main:led')).toBe(true)
-    expect(merged.has('main:unknown')).toBe(false)
-    expect(merged.size).toBe(2)
+    expect(forced.get('main:ticks')).toBe(true)
+    expect(forced.get('main:led')).toBe(true)
+    expect(forced.has('main:unknown')).toBe(false)
+    expect(forced.size).toBe(2)
+    expect([...external]).toEqual(['main:led'])
+  })
+
+  /**
+   * The refresh has to RETIRE what the registry dropped — a force released from
+   * the web page is exactly the case this exists for — while leaving a force the
+   * editor made alone, since the editor forces the target directly and the
+   * backend never hears about it.
+   */
+  it('retires a force the registry released, and never the editor own', () => {
+    const current = new Map([
+      ['main:led', true],
+      ['main:ticks', true],
+    ])
+    const previous = new Set(['main:led'])
+
+    const { forced, external } = applyExternalForces(current, previous, [], new Map())
+
+    expect(forced.has('main:led')).toBe(false)
+    expect(forced.get('main:ticks')).toBe(true)
+    expect(external.size).toBe(0)
   })
 })

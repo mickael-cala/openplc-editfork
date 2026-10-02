@@ -598,3 +598,13 @@ Playwright (aucun workflow CI ne le lance ici) :
   `@micka` (le login n'y etait pour rien). Recette de l'app construite consignee : `npm run build`, copier le
   preload dans `release/app/configs/dll/`, puis `electron release/app` — et jamais `npm run dev` sans avoir
   lance `npm run build:dll` au prealable.
+
+- **P2, moitie manquante (2026-10-02)** — le registre de forcage du backend etait lu UNE fois, a
+  l'ouverture de la session : un forcage fait (ou relache) depuis la page web PENDANT le debug
+  n'apparaissait donc jamais dans l'editeur. `useDebugSession` relit desormais `GET /api/force`
+  toutes les 2 s pendant toute la session, et `applyExternalForces` fait les deux moities (marquer ce
+  que le registre tient, retirer ce qu'il a relache) en suivant ce que LUI a contribue, pour ne jamais
+  relacher un forcage fait par l'editeur (celui-ci parle directement a la cible, le backend ne le voit
+  pas). Mesure du jour, cible en marche : forcer l'index 2 (LED) par `POST /api/force` donne `01` au
+  canal de debug et `true` sur `%QX0.0`, et **tient** 7 s plus tard — cible et backend etaient hors de
+  cause, c'etait bien l'editeur qui ne regardait pas.

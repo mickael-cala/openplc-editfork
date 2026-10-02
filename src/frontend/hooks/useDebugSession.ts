@@ -10,7 +10,7 @@
  * The backend adapter decides the actual transport (IPC, HTTP, WebRTC, etc.).
  */
 
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 import type { DebugTreeNode, FbInstanceInfo } from '../../middleware/shared/ports/types'
 import { useDebugger, useRuntime } from '../../middleware/shared/providers'
@@ -18,9 +18,9 @@ import { resolveTargetCapabilities } from '../../middleware/shared/utils/target-
 import { useOpenPLCStore } from '../store'
 import { parseDebugMap } from '../utils/debug-parser'
 import {
+  applyExternalForces,
   declarationCompositeKey,
   functionBlockInstancePaths,
-  mergeExternalForces,
   projectV3DebugEntries,
   projectV3Declarations,
 } from '../utils/debug-v3-projection'
@@ -55,6 +55,16 @@ export interface UseDebugSessionReturn {
   debugTreesRef: React.MutableRefObject<Record<string, DebugTreeNode[]>>
 }
 
+/**
+ * How often the backend's force registry is re-read while a session is open.
+ *
+ * Slow on purpose: the refresh exists so a force made (or released) from the web
+ * page shows up on its own, and two seconds is comfortably below the time it
+ * takes someone to look from one screen to the other. Each read costs the
+ * backend one `GET /api/force`, and that costs the target one FC 0x45.
+ */
+const FORCE_REGISTRY_POLL_MS = 2000
+
 export function useDebugSession(): UseDebugSessionReturn {
   const debuggerPort = useDebugger()
   const runtimePort = useRuntime()
@@ -67,6 +77,46 @@ export function useDebugSession(): UseDebugSessionReturn {
   } = useOpenPLCStore()
 
   const debugTreesRef = useRef<Record<string, DebugTreeNode[]>>({})
+  /** Keys the backend's registry contributed to `debugForcedVariables`. */
+  const externalForcesRef = useRef<Set<string>>(new Set())
+  /** Ordinal → composite key for this session, or null when the target is not
+   *  one that indexes its own table (nothing to apply a registry to). */
+  const externalForceIndexToKeyRef = useRef<Map<number, string> | null>(null)
+  const forcePollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  /**
+   * Re-read the backend's force registry and fold it into the store.
+   *
+   * A failure is cosmetic — the editor's own forces, and the debug channel, do
+   * not depend on this — so a backend that predates the registry (WS-109) simply
+   * never reports anything.
+   */
+  const refreshExternalForces = useCallback(async (): Promise<void> => {
+    const indexToKey = externalForceIndexToKeyRef.current
+    if (indexToKey === null) return
+    try {
+      const registry = await runtimePort.getForceRegistry()
+      if (!registry.success || registry.forces === undefined) return
+      const state = useOpenPLCStore.getState()
+      const applied = applyExternalForces(
+        state.workspace.debugForcedVariables,
+        externalForcesRef.current,
+        registry.forces,
+        indexToKey,
+      )
+      externalForcesRef.current = applied.external
+      state.workspaceActions.setDebugForcedVariables(applied.forced)
+    } catch {
+      // See above.
+    }
+  }, [runtimePort])
+
+  useEffect(
+    () => () => {
+      if (forcePollRef.current !== null) clearInterval(forcePollRef.current)
+    },
+    [],
+  )
 
   const connectAndStart = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
     const { project, workspaceActions: wsActions, consoleActions: logActions } = useOpenPLCStore.getState()
@@ -170,32 +220,30 @@ export function useDebugSession(): UseDebugSessionReturn {
       const indexMap = deriveVariableIndexMap(treeMap, debugMap)
 
       // A force made from the web interface lives in the BACKEND's registry
-      // (the runtime never says who forced what). Read it once when the session
-      // opens and mark those variables as forced; the polling loop then shows
-      // the value the target actually serves. Failures are cosmetic — the
-      // editor's own forces, and the debug channel, are unaffected.
+      // (the runtime never says who forced what), and it appears — or disappears
+      // — WHILE the session runs: someone forcing a variable from the web page
+      // is the normal case, not the exception. So the registry is read once here
+      // and then re-read on a slow timer; each refresh marks what the backend
+      // holds and retires what it released, which is what lets the editor show
+      // "forced" for a force it never made (P2).
       if (targetIndexesByOrdinal) {
-        try {
-          const registry = await runtimePort.getForceRegistry()
-          if (registry.success && registry.forces !== undefined && registry.forces.length > 0) {
-            const functionBlockInstances = functionBlockInstancePaths(
-              debugPous,
-              instances,
-              useOpenPLCStore.getState().libraries.system,
+        const functionBlockInstances = functionBlockInstancePaths(
+          debugPous,
+          instances,
+          useOpenPLCStore.getState().libraries.system,
+        )
+        externalForceIndexToKeyRef.current = new Map(
+          projectV3Declarations(debugMap, { functionBlockInstances })
+            .map(
+              (declaration) =>
+                [declaration.index, declarationCompositeKey(declaration.declaration, debugPous, instances)] as const,
             )
-            const indexToKey = new Map<number, string>()
-            for (const declaration of projectV3Declarations(debugMap, { functionBlockInstances })) {
-              const key = declarationCompositeKey(declaration.declaration, debugPous, instances)
-              if (key !== undefined) indexToKey.set(declaration.index, key)
-            }
-            const state = useOpenPLCStore.getState()
-            state.workspaceActions.setDebugForcedVariables(
-              mergeExternalForces(state.workspace.debugForcedVariables, registry.forces, indexToKey),
-            )
-          }
-        } catch {
-          // The backend may predate WS-109; nothing about the session depends
-          // on this registry.
+            .filter((entry): entry is readonly [number, string] => entry[1] !== undefined),
+        )
+        externalForcesRef.current = new Set()
+        await refreshExternalForces()
+        if (forcePollRef.current === null) {
+          forcePollRef.current = setInterval(() => void refreshExternalForces(), FORCE_REGISTRY_POLL_MS)
         }
       }
 
@@ -254,7 +302,7 @@ export function useDebugSession(): UseDebugSessionReturn {
       logActions.addLog({ level: 'error', message: error })
       return { success: false, error }
     }
-  }, [debuggerPort, deviceDefinitions, projectData, projectMeta])
+  }, [debuggerPort, deviceDefinitions, projectData, projectMeta, refreshExternalForces])
 
   /**
    * End the debug session — and ONLY the debug session.
@@ -265,6 +313,15 @@ export function useDebugSession(): UseDebugSessionReturn {
    * and closing that session is the connection manager's.
    */
   const stopSession = useCallback(async () => {
+    // The registry refresh belongs to this session: letting it run on would keep
+    // marking variables as forced after the debugger is gone.
+    if (forcePollRef.current !== null) {
+      clearInterval(forcePollRef.current)
+      forcePollRef.current = null
+    }
+    externalForcesRef.current = new Set()
+    externalForceIndexToKeyRef.current = null
+
     await debuggerPort.disconnect()
 
     workspaceActions.clearDebugState()
