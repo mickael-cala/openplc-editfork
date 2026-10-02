@@ -12,16 +12,6 @@ import { HardwareModule } from '../hardware-module'
 
 jest.mock('electron', () => ({ app: { getPath: jest.fn(() => '/mock/user-data'), isPackaged: false } }))
 jest.mock('serialport', () => ({ SerialPort: { list: jest.fn().mockResolvedValue([]) } }))
-jest.mock('@root/backend/editor/package-manager', () => ({
-  PackageManagerModule: class {
-    listInstalled(): unknown[] {
-      return []
-    }
-    getInstalledPackageManifest(): null {
-      return null
-    }
-  },
-}))
 
 describe('getAvailableBoards', () => {
   beforeEach(() => {
@@ -60,5 +50,19 @@ describe('getAvailableBoards', () => {
     // A board with no block silently inherits the `compiler`-derived preset —
     // which is how Runtime v3 ended up declaring a WebSocket it cannot speak.
     expect(missing).toEqual([])
+  })
+
+  /**
+   * ONE target, by construction (docs/STELLARIA-V3.md). The list is the bundled
+   * catalogue and nothing else: installed `.vpp` packages are not merged in any
+   * more, which is also what closed the last path from a project to the Runtime
+   * v4 pipeline this fork has removed.
+   */
+  it('serves the bundled catalogue and nothing else', async () => {
+    const boards = await new HardwareModule().getAvailableBoards()
+    const declared = Object.keys(getHalsFile<Record<string, unknown>>())
+
+    expect([...boards.keys()].sort()).toEqual(declared.sort())
+    expect([...boards.keys()]).toEqual(['OpenPLC Runtime v3'])
   })
 })

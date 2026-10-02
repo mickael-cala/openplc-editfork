@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, resolve as pathResolve, sep as pathSep } from 'node:path'
 import { promisify } from 'node:util'
@@ -284,128 +283,15 @@ class HardwareModule {
         })
       })
     }
-    // Merge boards from installed VPP packages
-    const mutableBoards: AvailableBoards = new Map(availableBoards)
-    await this.#mergeVppBoards(mutableBoards)
-
-    // Group by source VPP package so devices from the same package land
-    // contiguously in the device dropdown, with the three built-in targets
-    // (OpenPLC Runtime v3, v4, Simulator) pinned to the top. See
-    // `order-boards-by-vpp-group.ts` for the full ordering contract.
-    return orderBoardsByVppGroup(mutableBoards)
-  }
-
-  async #mergeVppBoards(boards: AvailableBoards): Promise<void> {
-    try {
-      const packageManager = new PackageManagerModule()
-      const installed = packageManager.listInstalled()
-      for (const pkg of installed) {
-        const manifest = packageManager.getInstalledPackageManifest(pkg.packageId)
-        if (!manifest) continue
-
-        for (const device of manifest.devices) {
-          // Read all screen definitions
-          const screens: Record<string, unknown> = {}
-          if (device.screens) {
-            for (const [screenName, screenFile] of Object.entries(device.screens)) {
-              const screenPath = join(pkg.path, screenFile)
-              if (existsSync(screenPath)) {
-                try {
-                  screens[screenName] = await HardwareModule.readJSONFile(screenPath)
-                } catch {
-                  /* ignore invalid screen */
-                }
-              }
-            }
-          }
-
-          // Map target type to compiler
-          const compiler = device.target.type === 'runtime-v4' ? 'openplc-compiler' : 'arduino-cli'
-
-          // Per-module configuration screens live alongside top-level
-          // screens; load them eagerly so the renderer can present the
-          // full per-slot detail pane without an extra IPC round trip.
-          const loadModuleConfigScreen = async (relPath: string | undefined) => {
-            if (!relPath) return undefined
-            const fullPath = join(pkg.path, relPath)
-            if (!existsSync(fullPath)) return undefined
-            try {
-              return await HardwareModule.readJSONFile(fullPath)
-            } catch {
-              return undefined
-            }
-          }
-
-          const modules = device.moduleSystem
-            ? await Promise.all(
-                device.moduleSystem.modules.map(async (m) => ({
-                  id: m.id,
-                  name: m.name,
-                  hwId: m.hwId,
-                  fixed: m.fixed,
-                  image: m.image,
-                  description: m.description,
-                  specs: m.specs,
-                  configScreen: m.configScreen,
-                  configScreenDefinition: await loadModuleConfigScreen(m.configScreen),
-                  io: m.io,
-                  parameters: m.parameters,
-                  addressMapping: m.addressMapping,
-                })),
-              )
-            : []
-
-          boards.set(device.name, {
-            compiler,
-            core: device.target.core ?? '',
-            // Upload transport ("ethernet" for the LOGO! 8.2; serial default).
-            uploadMethod: device.target.uploadMethod,
-            ...(device.target.platform ? { platform: device.target.platform } : {}),
-            preview: device.preview,
-            specs: device.specs ?? {},
-            pins: {
-              defaultDin: device.defaults?.pins?.defaultDin,
-              defaultDout: device.defaults?.pins?.defaultDout,
-              defaultAin: device.defaults?.pins?.defaultAin,
-              defaultAout: device.defaults?.pins?.defaultAout,
-            },
-            // Forward platformOptions only when the manifest actually declares
-            // some; the UI keys off `platformOptions?.length` to decide whether
-            // to render the variant dropdown, so leaving it undefined for
-            // boards that don't expose variants keeps the JSX gate tight.
-            platformOptions:
-              device.target.platformOptions && device.target.platformOptions.length > 0
-                ? device.target.platformOptions
-                : undefined,
-            // Forward any capability overrides the manifest declares (e.g. a
-            // runtime-v4 GPIO board setting `pinMapping: true`).
-            // `resolveTargetCapabilities` merges these over the preset.
-            capabilities: device.capabilities,
-            vpp: {
-              packageId: manifest.package.id,
-              vendor: manifest.package.vendor.name,
-              deviceId: device.id,
-              packagePath: pkg.path,
-              screens,
-              ...(device.hidesNativeScreens ? { hidesNativeScreens: device.hidesNativeScreens } : {}),
-              moduleSystem: device.moduleSystem
-                ? {
-                    enabled: device.moduleSystem.enabled,
-                    maxSlots: device.moduleSystem.maxSlots,
-                    modules,
-                  }
-                : null,
-            },
-            ...(device.serialPorts ? { serialPorts: device.serialPorts } : {}),
-            ...(device.defaultSerial ? { defaultSerial: device.defaultSerial } : {}),
-            ...(device.networkInterfaces ? { networkInterfaces: device.networkInterfaces } : {}),
-            ...(device.debug ? { debug: device.debug } : {}),
-          })
-        }
-      }
-    } catch (err) {
-      logger.error(`Failed to load VPP packages: ${String(err)}`)
-    }
+    // ONE target, by construction: this fork serves OpenPLC Runtime v3
+    // (docs/STELLARIA-V3.md), so the catalogue `hals.json` is the whole board
+    // list. Installed `.vpp` packages are no longer merged into it — they were
+    // also the last way a project could still reach the Runtime v4 pipeline or
+    // the Arduino firmware chain this fork has removed.
+    //
+    // The ordering helper stays: it pins the built-in targets to the top of the
+    // device dropdown, which still matters with a list of one.
+    return orderBoardsByVppGroup(new Map(availableBoards))
   }
 
   async getBoardImagePreview(image: string, packagePath?: string) {
