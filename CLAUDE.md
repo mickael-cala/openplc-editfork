@@ -68,20 +68,22 @@ upstream fix to shared code has to be re-read rather than merged.
 ## Electron e2e (Playwright)
 
 No CI workflow runs Playwright, so these are local checks. `e2e/` drives the real
-Electron app through `_electron.launch`, and three things bite before any assertion:
+Electron app through `_electron.launch`, and two things bite before any assertion:
 
 ```bash
 npm run build                                          # main + renderer
-mkdir -p release/app/configs/dll
-cp release/app/dist/main/preload.js release/app/configs/dll/preload.js
 npx playwright test e2e/<spec>.ts --workers=1
 ```
 
-- **The preload copy is required.** `main.ts` picks the preload with `app.isPackaged`,
-  and a suite launching `release/app/dist/main/main.js` directly is NOT packaged, so it
-  looks under `release/app/configs/dll/` - a path `npm run build` never writes. Without
-  it the window renders blank and the only clue is `Cannot read properties of undefined
-  (reading 'onSimulatorStopped')` in the renderer console.
+- **The preload is resolved, not copied.** `main.ts` used to choose it with
+  `app.isPackaged`, which sent a built-but-unpackaged launch (a suite starting
+  `release/app/dist/main/main.js`, or `electron release/app` by hand) to
+  `release/app/configs/dll/` - a path `npm run build` never writes. The window then
+  rendered blank and the only clue was `Cannot read properties of undefined (reading
+  'onSimulatorStopped')` in the renderer console. `pickExistingPath`
+  (`src/main/utils/pick-existing-path.ts`) now takes the first candidate that exists,
+  and the same fix resolves the splash page; `Main window preload: <path>` in the log
+  says which one won.
 - **Do not set `NODE_ENV=development`.** `resolveHtmlPath` would point the window at the
   webpack dev server on `localhost:1212`, which is not running against a built app.
 - **`firstWindow()` returns the splash**, which then closes. Poll `app.windows()` for the

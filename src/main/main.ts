@@ -30,6 +30,7 @@ import MenuBuilder from './menu'
 import MainProcessBridge from './modules/ipc/main'
 import { createQuitCoordinator } from './modules/lifecycle/quit-coordinator'
 import { store } from './modules/store'
+import { pickExistingPath } from './utils/pick-existing-path'
 
 enableMapSet()
 
@@ -196,13 +197,24 @@ const createMainWindow = async () => {
     },
   })
 
-  const splashPath = app.isPackaged
-    ? resolve(__dirname, '../main/splash.html')
-    : 'src/main/modules/preload/splash-screen/splash.html'
-  splash
-    .loadFile(splashPath)
-    .then(() => logger.info('Splash screen loaded successfully'))
-    .catch((error: unknown) => logger.error('Error loading splash screen: ' + getErrorMessage(error)))
+  /**
+   * Ask which splash file is there rather than inferring it from `app.isPackaged`:
+   * a built-but-unpackaged launch used to be handed a source path, and the splash
+   * silently failed to load (`ERR_FILE_NOT_FOUND`) with a blank startup screen.
+   */
+  const splashPath = pickExistingPath([
+    join(__dirname, 'splash.html'),
+    resolve(__dirname, '../main/splash.html'),
+    join(process.cwd(), 'src/main/modules/preload/splash-screen/splash.html'),
+  ])
+  if (splashPath === null) {
+    logger.warn('Splash screen file not found; starting without it.')
+  } else {
+    splash
+      .loadFile(splashPath)
+      .then(() => logger.info('Splash screen loaded successfully'))
+      .catch((error: unknown) => logger.error('Error loading splash screen: ' + getErrorMessage(error)))
+  }
 
   splash.setIgnoreMouseEvents(false)
 
@@ -216,6 +228,17 @@ const createMainWindow = async () => {
    * Main window configuration
    */
 
+  /**
+   * The preload script sits next to the compiled main entry, in `dist/main`, and
+   * that is true of a packaged build AND of the built-then-launched application
+   * this repository runs. `app.isPackaged` sent the latter to `configs/dll/`, a
+   * path the build never writes, so the window came up blank with no usable clue.
+   */
+  const preloadPath =
+    pickExistingPath([join(__dirname, 'preload.js'), join(__dirname, '../../configs/dll/preload.js')]) ??
+    join(__dirname, 'preload.js')
+  logger.info(`Main window preload: ${preloadPath}`)
+
   // Create the main window instance.
   mainWindow = new BrowserWindow({
     minWidth: 1124,
@@ -225,7 +248,7 @@ const createMainWindow = async () => {
     ...titlebarStyles,
     webPreferences: {
       sandbox: true,
-      preload: app.isPackaged ? join(__dirname, 'preload.js') : join(__dirname, '../../configs/dll/preload.js'),
+      preload: preloadPath,
     },
   })
 

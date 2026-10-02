@@ -248,7 +248,7 @@ Ordre imposé par le risque : d'abord ce qui **empêche** de tester (D1), puis c
 | J5.1 | Retirer les binaires qui ne servent plus : `resources/bin` = **212,2 Mo**, `resources/sources` = **6,9 Mo** | `resources/`, `scripts/download-binaries.ts`, `package.json` (`postinstall`, `setup:strucpp`) | `npm run build` puis lancement : la cible v3 est toujours proposée, `resources/bin` ne contient plus que ce qui est consommé |
 | J5.2 | Retirer les dépendances orphelines | `package.json` : `electron-updater` (:77), `avr8js` (:67), `jszip` (:83) selon J2 | `npx tsc --noEmit`, `npx eslint "./src/**/*.{ts,tsx}"`, `npm run package` |
 | J5.3 | Identité et licence : retirer Autonomy Logic / marques tierces, `THIRD-PARTY.md`, crédits | `docs/STELLARIA-BRANDING.md` du dépôt runtime (`ADR-023`), `release/app/package.json` (`license: MIT` à corriger : l'amont est GPL-3.0) | relecture de l'installeur + `THIRD-PARTY.md` présent |
-| J5.4 | **Lanceur unique** : demarrer et arreter TOUTE la chaine (application + serveur + programme de la machine) d'un seul geste -- demande de `@micka` (2026-10-02, « c'est lassant de toujours faire et defaire »), **a faire une fois que tout tourne** ; en attendant, les trois etapes manuelles sont en 4.3 (construction + relance) et l'ordre d'arret en 4.8 | `scripts/` (nouveau) + `package.json` | une commande demarre la chaine (les quatre canaux repondent, le programme charge repond au canal de suivi) et une commande l'arrete proprement (les controles de cloture de 4.8, y compris la copie du prechargement que le lanceur doit faire lui-meme) |
+| J5.4 | **Lanceur unique** : demarrer et arreter TOUTE la chaine (application + serveur + programme de la machine) d'un seul geste -- demande de `@micka` (2026-10-02, « c'est lassant de toujours faire et defaire »), **a faire une fois que tout tourne** ; en attendant, les trois etapes manuelles sont en 4.3 (construction + relance) et l'ordre d'arret en 4.8 | `scripts/` (nouveau) + `package.json` | une commande demarre la chaine (les quatre canaux repondent, le programme charge repond au canal de suivi) et une commande l'arrete proprement (les controles de cloture de 4.8, sans copie manuelle du prechargement : l'application choisit elle-meme le fichier qui existe) |
 
 ### J6 — (cap) chaîne locale MatIEC + Zig
 
@@ -435,14 +435,15 @@ il est **bloqué par D1 exactement comme l'interface** : c'est le meilleur endro
 Playwright (aucun workflow CI ne le lance ici) :
 
     npm run build
-    mkdir -p release/app/configs/dll
-    cp release/app/dist/main/preload.js release/app/configs/dll/preload.js
     npx playwright test e2e/<spec>.ts --workers=1
+
+(la copie du prechargement qui figurait ici n'est plus necessaire, voir 4.7 et 4.8)
 
 ### 4.7 Pièges connus (déjà payés une fois)
 
-- **Le préload doit être copié** dans `release/app/configs/dll/` sinon la fenêtre est
-  blanche ; ne **pas** définir `NODE_ENV=development` ; `firstWindow()` rend le splash.
+- **Le preload n'a plus a etre copie** (corrige le 2026-10-02 : l'application prend le premier
+  fichier qui existe, `dist/main/preload.js` d'abord, et son journal dit lequel) ; ne **pas**
+  definir `NODE_ENV=development` ; `firstWindow()` rend le splash.
 - Modifier un `.st` pendant que le PLC tourne ne suffit pas : `plcbuild` recompile le
   blob **et** la cible refuse une compilation à chaud si le PLC est `RUNNING` — utiliser
   `--yes` (CLI) ou arrêter le PLC d'abord.
@@ -516,9 +517,9 @@ status` propre dans les trois depots.
 
 **Defauts cosmetiques releves dans ces journaux** (aucun blocage, a traiter avec J5) :
 
-- le **splash est introuvable dans une app construite** : `ERR_FILE_NOT_FOUND` sur
-  `release/app/src/main/modules/preload/splash-screen/splash.html` — la recette de build ne copie
-  pas cette page, l'ecran de demarrage reste vide ;
+- ~~le **splash est introuvable dans une app construite**~~ : **corrige le 2026-10-02**, meme cause
+  que le preload (l'application cherchait un chemin de developpeur) : elle prend desormais le premier
+  fichier qui existe, journal a l'appui (`Splash screen loaded successfully`) ;
 - `arduino-cli` introuvable dans un lancement local (le binaire ne vit que dans un paquet) : bruit
   attendu, mais il salit chaque demarrage ;
 - les 404 de l'updater decrits plus haut (app installee, dossier de journaux partage).
@@ -685,3 +686,12 @@ status` propre dans les trois depots.
   l'editeur, qui ne lisait le registre du backend qu'a l'ouverture de la session : corrige en
   `9c9600414` (relecture toutes les 2 s, marques posees **et** retirees, jamais celles de
   l'editeur). Journaux de la session, empreinte des forceurs et recette d'arret propre : 4.8.
+- **2026-10-02, le preload et le splash ne dependent plus de la facon de lancer** (suite de la demande
+  de `@micka` : « c'est lassant de toujours faire et defaire ») — `main.ts` choisissait ces deux
+  fichiers avec `app.isPackaged`, donc un lancement construit-mais-non-package (notre facon de faire,
+  et celle du banc d'essai Playwright) partait vers des chemins de developpeur que la construction
+  n'ecrit jamais : fenetre blanche dans un cas, splash absent dans l'autre. `pickExistingPath`
+  (`src/main/utils/pick-existing-path.ts`, 4 tests) prend desormais le premier candidat qui existe et
+  le journal dit lequel. Mesure : copie manuelle **supprimee**, relance -> `Main window preload:`
+  `.../dist/main/preload.js` puis `Splash screen loaded successfully`, la ou les lancements precedents
+  affichaient tous `Error loading splash screen: ERR_FILE_NOT_FOUND`.
