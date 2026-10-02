@@ -721,3 +721,32 @@ status` propre dans les trois depots.
   seul. Ajoute : le cas « variable forcee dont l'index est inconnu » (le panneau montre la marque et une
   valeur figee, sans rien dire) est desormais verrouille par un test. Reste : la confirmation visuelle de
   `@micka`.
+## 7. Reprise (etat au 2026-10-02 au soir)
+
+**Ou on s'est arrete.** Sprint 1 « affichage du forcage » clos cote code : cause du gel trouvee et
+corrigee (mon correctif P2 reecrivait `debugForcedVariables` toutes les 2 s, ce qui invalidait en
+continu le cache des index a interroger -- voir le journal et le piege en 4.7), sonde de forcage en
+place, traces en place, tests ajoutes. La machine est **arretee proprement** (automate -> serveur ->
+application ; `plc.dll` libre, ports 502/8080/8443 fermes) et les journaux du soir sont dans
+`C:\Users\micka\gh\_session-2026-10-02-soir\`.
+
+**En attente de `@micka` :**
+
+- la **confirmation visuelle** du forcage a true (valeur affichee TRUE + courbe qui monte) ;
+- les decisions : sort de **STruC++** (D2), option **(C)** (la cible publie sa table), **push ou non**
+  des commits locaux, **levee du verrou** des deux depots voisins.
+
+**Prochain sprint** (a lancer sur son feu vert) : « maison vide » -- suppression du code mort de la v4 :
+`compose-runtime-v4-bundle`, `compose-firmware-bundle`, `build-arduino-cli-args`, `runtime-version-gate`,
+`probe-runtime-version`, `generate-defines`/`confs`/`retain`/`vpp`, `opcua-credentials`,
+`third-party-libraries`, les **7 methodes de port** orphelines et leurs implementations editeur, puis
+l'interface des arguments (champs firmware/v4) et ses appelants. **Un commit par famille** ;
+verification : `tsc`, eslint, prettier, les 4 shards, puis build complet **et** application relancee
+pour prouver que rien ne manque a l'execution.
+
+**Ensuite :** J5 (diete de 212 Mo, rebadge, licence) **avec le lanceur unique** (J5.4) ; puis packages /
+ecrans vendeurs / bus ; puis le simulateur et la decision STruC++.
+
+**Outils laisses en place :** `npm run debug:force-probe` (ce que la cible sert vraiment, sans I-HM) et
+la trace `[force] ... bytes=[...] -> accepted/rejected` dans la console de l'application (ce que
+l'editeur envoie vraiment). Ces deux la sont ce qui a manque pendant les tours en rond.
