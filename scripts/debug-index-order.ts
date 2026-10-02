@@ -26,6 +26,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { runProgramBuildPipeline } from '../src/backend/shared/library/program-build-pipeline'
+import type { DebugMap } from '../src/frontend/utils/debug-parser'
+import { projectV3DebugEntries } from '../src/frontend/utils/debug-v3-projection'
 
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(name)
@@ -54,26 +56,24 @@ if (!mapFile) {
   process.exit(1)
 }
 
-interface Leaf {
-  arrayIdx: number
-  elemIdx: number
-  path: string
-  type: string
-}
-interface DebugMap {
-  md5: string
-  leaves: Leaf[]
-}
-
 const editorMap = JSON.parse(mapFile.content) as DebugMap
 /** The last path segment, i.e. the member name: `INSTANCE0.LED` -> `LED`. */
 const leafName = (path: string): string => (path.split('.').pop() ?? path).toUpperCase()
-const editorOrder = editorMap.leaves.map((leaf) => leafName(leaf.path))
+const fbInstances = new Set(
+  process.argv.flatMap((value, index, all) =>
+    value === '--fb' && all[index + 1] ? [all[index + 1].toUpperCase()] : [],
+  ),
+)
+const projected = projectV3DebugEntries(editorMap, { functionBlockInstances: fbInstances })
+const editorOrder = projected.map((entry) => leafName(entry.name))
 
-console.log(`editor (STruC++ debug-map.json) — ${editorOrder.length} leaves, md5 ${editorMap.md5}`)
-editorMap.leaves.forEach((leaf, index) =>
+console.log(
+  `editor (STruC++ debug-map.json projected onto the v3 table) — ${editorOrder.length} entries ` +
+    `from ${editorMap.leaves.length} leaves, md5 ${editorMap.md5}`,
+)
+projected.forEach((entry, index) =>
   console.log(
-    `  ${String(index).padStart(2)}  arrayIdx=${leaf.arrayIdx} elemIdx=${leaf.elemIdx}  ${leafName(leaf.path)}  ${leaf.type}`,
+    `  ${String(index).padStart(2)}  index=${entry.index}  ${leafName(entry.name)}  ${entry.type.replace(/_ENUM$/, '')}`,
   ),
 )
 

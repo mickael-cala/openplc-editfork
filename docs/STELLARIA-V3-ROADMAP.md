@@ -117,6 +117,28 @@ voie « l'éditeur fournit la table » si on la choisit (cf. D2, option A).
 | `P4` — à la (re)connexion, relire l'état de la cible | à confirmer | `src/cli/debug/open-session.ts:155-176` (le CLI compare déjà le MD5 de la cible au `debug-map.json`) |
 | `P5` — rappels de protocole | conformes | `modbus-client.ts:209` (sentinelle retirée), `modbus-pdu.ts:147-183` (Phase 4) |
 
+**D4 — avec un FB *utilisateur*, la table de la cible est fausse et ne compile pas (mesuré le 2026-10-02).**
+
+`plcbuild` extrait **toutes** les lignes `__DECLARE_VAR`/`__DECLARE_LOCATED` de `core/POUS.h`, puis
+adresse chaque nom comme un champ de l'instance programme (`RES0__INSTANCE0.<NOM>`).
+Or un FB défini **dans le projet** voit son `typedef` écrit dans le même `POUS.h` :
+
+    // FUNCTION_BLOCK MYDELAYER   -> __DECLARE_VAR(BOOL,EN|ENO|IN|OUT|LAST)
+    // PROGRAM MAIN               -> __DECLARE_LOCATED(BOOL,LED), MYDELAYER D1;, __DECLARE_VAR(INT,N)
+
+Résultat mesuré (`st_files/d2_fb.st`) : `VAR_COUNT 7` (les 5 champs du FB **puis** LED et N) et
+`get_var_addr` écrit `&RES0__INSTANCE0.EN.value` — un champ qui appartient à `MYDELAYER`, pas à
+l'instance programme. `plcbuild` échoue alors à compiler le `debug.c` qu'il vient d'écrire
+(`debug.c:68: error: field not found: LED`, `Compilation finished with errors!`).
+
+Un FB **de bibliothèque** (`TON` de `pascal_test.st`) ne pose pas ce problème : son typedef vit dans
+`iec_std_lib.h`, donc absent de `POUS.h`, donc absent de la table (mesuré : 8 entrées, `TON1` non listé).
+
+Conséquence pour l'option B : la projection est **correcte sans FB utilisateur** (mesuré : scalaires
+5/5, tableau 3/3 « identical order ») ; avec un FB utilisateur, aucune projection ne peut coïncider, et
+la session échouera de toute façon sur le compte. À porter dans `ERRATA.md` du dépôt runtime
+(`ERR-nnn`) : c'est un défaut de `plcbuild`, pas de l'éditeur.
+
 ### 1.3 État de J1 (livré) et de l'environnement
 
 - J1 est livré sur cette branche : `dbd397cb9` (auto-update retiré, télémétrie IA droppée,
@@ -461,3 +483,12 @@ Playwright (aucun workflow CI ne le lance ici) :
   `plcbuild`. Restent : le calcul des instances de FB depuis le projet, le branchement dans
   `useDebugSession.ts:96` (et `src/cli/debug/variables.ts:133`), et la persistance des artefacts v3
   (`<projet>/build/<cible>/src/`) sans laquelle le chemin debug du CLI reste sans `debug-map.json`.
+
+- **Option B, incréments 2 et 3 (2026-10-02)** — `functionBlockInstancePaths` (réutilise
+  `isFunctionBlockType`, la règle de l'arbre, donc un STRUCT reste en place), branchement dans
+  `useDebugSession.ts` (conditionné à `debuggerTransports: ['modbus-tcp']`, avec un log explicite
+  « N leaves projected onto M target entries »), et sonde étendue (`--fb`). Vérification appariée,
+  même `.st` des deux côtés : **scalaires 5/5**, **tableau 5 feuilles → 3 entrées = 3 de la cible**,
+  verdict « identical order » dans les deux cas ; **FB utilisateur** → D4 (défaut `plcbuild`).
+  Reste J3 : persister `program.st` + `debug-map.json` sous `<projet>/build/<cible>/src/` pour que
+  le CLI (et `src/cli/debug/variables.ts`) voie la même table que la GUI.

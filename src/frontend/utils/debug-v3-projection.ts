@@ -23,7 +23,10 @@
  * variable has fields too, and the target *does* list it as one entry), so the
  * caller supplies them from the project's variable table.
  */
+import type { SystemLibrary } from '../../middleware/shared/ports/library-types'
+import type { PLCInstance, PLCPou } from '../../middleware/shared/ports/types'
 import type { DebugMap, DebugVariableEntry } from './debug-parser'
+import { isFunctionBlockType, normalizeTypeString } from './pou-helpers'
 
 /**
  * The declaration a leaf belongs to: `INSTANCE0.ARR[2]` and
@@ -68,4 +71,40 @@ export function projectV3DebugEntries(map: DebugMap, options: V3ProjectionOption
   }
 
   return entries
+}
+
+/**
+ * Declaration paths (`INSTANCE0.TON1`) of every function-block instance the
+ * project instantiates — the declarations the target's table omits.
+ *
+ * The FB test is `isFunctionBlockType`, the same predicate the debug tree uses
+ * (`debug-tree-traversal.ts`), so the projection and the tree agree on what is
+ * an FB and what is a STRUCT — and a STRUCT, which the target *does* list as one
+ * `__DECLARE_VAR` entry, must stay in the projection.
+ */
+export function functionBlockInstancePaths(
+  pous: PLCPou[],
+  instances: PLCInstance[],
+  systemLibraries: SystemLibrary[],
+): Set<string> {
+  const paths = new Set<string>()
+
+  for (const instance of instances) {
+    const program = pous.find(
+      (pou) =>
+        normalizeTypeString(pou.pouType) === 'program' && pou.name.toUpperCase() === instance.program.toUpperCase(),
+    )
+    if (!program) continue
+
+    for (const variable of program.interface?.variables ?? []) {
+      // Externals live in the shared globals, not in the instance's struct.
+      if (variable.class === 'external') continue
+      if (variable.type.definition === 'base-type' || variable.type.definition === 'array') continue
+      if (!isFunctionBlockType(variable.type.value, pous, systemLibraries)) continue
+
+      paths.add(`${instance.name}.${variable.name}`.toUpperCase())
+    }
+  }
+
+  return paths
 }

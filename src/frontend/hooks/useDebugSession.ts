@@ -14,8 +14,10 @@ import { useCallback, useRef } from 'react'
 
 import type { DebugTreeNode, FbInstanceInfo } from '../../middleware/shared/ports/types'
 import { useDebugger } from '../../middleware/shared/providers'
+import { resolveTargetCapabilities } from '../../middleware/shared/utils/target-capabilities'
 import { useOpenPLCStore } from '../store'
 import { parseDebugMap } from '../utils/debug-parser'
+import { functionBlockInstancePaths, projectV3DebugEntries } from '../utils/debug-v3-projection'
 import {
   buildDebugVariableTreeMap,
   buildFbInstanceMap,
@@ -93,10 +95,28 @@ export function useDebugSession(): UseDebugSessionReturn {
         return { success: false, error }
       }
 
-      const entriesForTree = debugMapToEntries(debugMap)
+      // A target reached over Modbus TCP indexes ITS OWN table — one entry per
+      // declaration, FB instances absent — not STruC++'s finer-grained leaf
+      // list, so the map is projected onto that table first. Sending STruC++'s
+      // positions to such a target read and forced the wrong variable, and made
+      // the FC 0x41 count check refuse the session as soon as the project had an
+      // array or an FB (measured: docs/STELLARIA-V3-ROADMAP.md, D2).
+      const boardInfo = useOpenPLCStore.getState().deviceAvailableOptions.availableBoards.get(boardTarget)
+      const targetIndexesByOrdinal = resolveTargetCapabilities(boardInfo).debuggerTransports.includes('modbus-tcp')
+      const entriesForTree = targetIndexesByOrdinal
+        ? projectV3DebugEntries(debugMap, {
+            functionBlockInstances: functionBlockInstancePaths(
+              debugPous,
+              instances,
+              useOpenPLCStore.getState().libraries.system,
+            ),
+          })
+        : debugMapToEntries(debugMap)
       logActions.addLog({
         level: 'info',
-        message: `Debug map: ${debugMap.leaves.length} leaves across ${debugMap.arrays.length} arrays.`,
+        message: targetIndexesByOrdinal
+          ? `Debug map: ${debugMap.leaves.length} leaves projected onto ${entriesForTree.length} target entries.`
+          : `Debug map: ${debugMap.leaves.length} leaves across ${debugMap.arrays.length} arrays.`,
       })
 
       // Build the debug variable tree — the single enumeration walk. The

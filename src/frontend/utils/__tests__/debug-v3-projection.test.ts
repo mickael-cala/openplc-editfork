@@ -4,8 +4,10 @@
  * `core/POUS.h` for the same programs (D2/J4.0 in
  * `docs/STELLARIA-V3-ROADMAP.md`).
  */
+import type { SystemLibrary } from '../../../middleware/shared/ports/library-types'
+import type { PLCInstance, PLCPou } from '../../../middleware/shared/ports/types'
 import type { DebugMap } from '../debug-parser'
-import { declarationPathOf, projectV3DebugEntries } from '../debug-v3-projection'
+import { declarationPathOf, functionBlockInstancePaths, projectV3DebugEntries } from '../debug-v3-projection'
 
 function mapOf(...leaves: Array<{ path: string; type: string }>): DebugMap {
   return {
@@ -93,5 +95,65 @@ describe('projectV3DebugEntries', () => {
 
   it('returns nothing for a map with no leaves', () => {
     expect(projectV3DebugEntries(mapOf())).toEqual([])
+  })
+})
+
+describe('functionBlockInstancePaths', () => {
+  const tonLibrary: SystemLibrary = {
+    name: 'standard',
+    pous: [{ name: 'TON', type: 'function-block', variables: [] }],
+  } as unknown as SystemLibrary
+
+  const program = (variables: Array<{ name: string; definition: string; value: string; class?: string }>): PLCPou =>
+    ({
+      name: 'prog0',
+      pouType: 'program',
+      interface: {
+        variables: variables.map((v) => ({
+          name: v.name,
+          class: v.class ?? 'local',
+          type: { definition: v.definition, value: v.value },
+        })),
+      },
+    }) as unknown as PLCPou
+
+  const instances: PLCInstance[] = [{ name: 'instance0', program: 'prog0', task: 'task0' }]
+
+  it('names the FB instances of a program, uppercased like the map paths', () => {
+    const pous = [
+      program([
+        { name: 'start', definition: 'base-type', value: 'BOOL' },
+        { name: 'ton1', definition: 'user-data-type', value: 'TON' },
+        { name: 'arr', definition: 'array', value: 'ARRAY' },
+      ]),
+    ]
+
+    expect([...functionBlockInstancePaths(pous, instances, [tonLibrary])]).toEqual(['INSTANCE0.TON1'])
+  })
+
+  it('leaves a struct in place, because the target lists it', () => {
+    const pous = [
+      program([
+        { name: 'cfg', definition: 'user-data-type', value: 'MY_STRUCT' },
+        { name: 'ton1', definition: 'user-data-type', value: 'TON' },
+      ]),
+    ]
+
+    expect([...functionBlockInstancePaths(pous, instances, [tonLibrary])]).toEqual(['INSTANCE0.TON1'])
+  })
+
+  it('ignores a program with no instance, and externals', () => {
+    const pous = [
+      program([
+        { name: 'shared', definition: 'user-data-type', value: 'TON', class: 'external' },
+        { name: 'ton1', definition: 'user-data-type', value: 'TON' },
+      ]),
+    ]
+
+    expect([...functionBlockInstancePaths(pous, [], [tonLibrary])]).toEqual([])
+    expect([...functionBlockInstancePaths(pous, [{ name: 'other', program: 'absent', task: 't' }], [tonLibrary])]).toEqual(
+      [],
+    )
+    expect([...functionBlockInstancePaths(pous, instances, [tonLibrary])]).toEqual(['INSTANCE0.TON1'])
   })
 })
