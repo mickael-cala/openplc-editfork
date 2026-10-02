@@ -68,33 +68,35 @@ Conséquence observée côté runtime (mesurée par `@micka`, `docs/EDITOR.md`) 
 contournement actuel est le patch binaire `tools/editor-patch/patch-editor-capabilities.ps1`
 (dépôt runtime), perdu à chaque mise à jour de l'éditeur.
 
-**D2 — les index de debug de l'éditeur et de la cible ne décrivent pas le même espace.**
+**D2 — l'éditeur et la cible ne comptent pas les mêmes variables (mesuré le 2026-10-02).**
 
-C'est le point le plus dangereux, parce qu'il est **silencieux** : les deux espaces
-peuvent avoir le **même nombre** d'entrées et un **ordre différent**, et le seul contrôle
-croisé que fait l'éditeur est le **compte** (FC `0x41`).
+Les deux espaces d'index partent du **même** `program.st`, mais ne découpent pas les
+variables de la même façon :
 
-| Espace | Règle d'ordre | Preuve |
+| Espace | Découpage | Preuve |
 |---|---|---|
-| Éditeur (`debug-map.json`, produit par STruC++) | « emit leaves in **declaration order** », une **feuille par membre** (champ de FB, de STRUCT, élément de tableau) | `docs/strucpp-migration/04-debugger.md:136`, `src/frontend/utils/debug-variable-finder.ts:39-52` |
-| Cible v3 (`core/debug.c`, produit par `plcbuild` depuis `core/POUS.h`) | ordre des **champs de la structure matiec** : variables privées d'abord, puis localisées ; **une entrée par déclaration** (`sizeof(TON)` pour une instance de FB) | `tools/plcbuild/plcbuild.lpr:735` (`BuildDebugTable`), `:747-753` |
+| Éditeur (`debug-map.json`, STruC++) | une **feuille par membre** : un tableau devient `ARR[0]`, `ARR[1]`, … | `docs/strucpp-migration/04-debugger.md` (feuilles « declaration order », exemple `speeds[0]`, `speeds[1]`) |
+| Cible v3 (`core/debug.c`, `plcbuild`) | une **entrée par déclaration** : `ARR` d'un bloc, une instance de FB **absente** de la table | `tools/plcbuild/plcbuild.lpr` (`BuildDebugTable`) ; mesuré sur `pascal_test.st` : 8 entrées, **`TON1` n'y figure pas** |
 
-Mesure sur le poste, programme `st_files/editor_demo.st` (4 localisées puis `ticks`) :
+**Programmes de scalaires seuls : les deux listes coïncident**, ordre compris — mesuré
+deux fois avec `npm run debug:index` (éditeur 5 feuilles `DEMARRER, LED, CLIGNOTE,
+SECONDES, TICKS` = cible 5 entrées dans le même ordre). L'ordre suit la déclaration du
+`.st` **transpilé**, pas celui du POU source (le transpileur regroupe les blocs, et les
+deux côtés suivent ce regroupement) — une comparaison « ordre source / table cible »
+avait laissé croire à une rotation : c'était une erreur de méthode, corrigée ici.
 
-    core/POUS.h:13-17      TICKS, DEMARRER, LED, CLIGNOTE, SECONDES
-    core/debug.c:61-65     index 0 = TICKS, 1 = DEMARRER, 2 = LED, 3 = CLIGNOTE, 4 = SECONDES
-    déclaration .st:19-25  demarrer, led, clignote, secondes, ticks
+Dès qu'un **tableau** ou une **instance de FB** apparaît, les comptes divergent
+(mesuré, même `.st`) :
 
-Autrement dit : pour ce programme, l'éditeur croit que l'index `0` est `demarrer`, la
-cible répond sur `ticks`. Le compte est le même (5 / 5) — le contrôle de la FC `0x41`
-passe. Un forçage « par nom » depuis l'éditeur peut donc écrire **une autre variable**
-que celle affichée, et une lecture afficher **une autre valeur** que la variable
-nommée, sans qu'aucun message ne le signale.
+    éditeur : 5 feuilles   LED(0), ARR[0](1), ARR[1](2), ARR[2](3), N(4)
+    cible   : 3 entrées    LED(0), ARR(1), N(2)         VAR_COUNT = 3
 
-`pascal_test.st` (le programme de recette du runtime) aggrave le cas : il contient une
-instance de FB (`ton1 : TON`) et une privée déclarée après (`prevLed`), donc les deux
-espaces diffèrent aussi **en nombre** (feuilles de FB côté éditeur, une seule entrée
-côté cible).
+Conséquence : le contrôle de la FC `0x41` (comparaison du **compte**) échoue et la
+session de debug est refusée — l'échec est **visible**, pas une corruption silencieuse.
+Mais le suivi et le forçage **par nom sont inutilisables pour tout programme contenant
+un tableau ou un FB**, ce qui est le cas courant. Un silence reste possible si les deux
+comptes coïncident par accident (tableau d'un élément, feuilles de FB compensant
+exactement un décalage) : c'est ce que J4.1 doit fermer.
 
 **D3 — la note « plus rien à produire pour la cible » est incomplète.**
 
@@ -165,8 +167,8 @@ Ordre imposé par le risque : d'abord ce qui **empêche** de tester (D1), puis c
 
 | # | Tâche | Fichiers | Preuve d'acceptation |
 |---|---|---|---|
-| J4.0 | **Mesurer D2 avant de coder** : sur un même `program.st`, comparer l'ordre/nombre des feuilles de l'éditeur et de la cible | `src/cli/debug/variables.ts` (`debug list-vars`) vs `core/debug.c` / `GET /api/debug` | § 4.5 : la comparaison est consignée (nom, index des deux côtés). **Tant qu'elle n'est pas faite, aucun forçage par nom n'est déclaré fiable** |
-| J4.1 | Trancher D2 (ADR à écrire) : **(A)** l'éditeur redevient fournisseur de la table `(*DBG:*)` — exact, mais suppose que l'éditeur connaisse les symboles générés par matiec (possible seulement quand la compilation redevient locale, J6) ; **(B)** extension `EXT` côté runtime : la cible publie `index → nom/type/taille`, l'éditeur construit son arbre depuis la cible (supprime toute duplication, sert aussi `P2.2`/`P2.3`) ; **(C)** convention alignée : une entrée par déclaration des deux côtés, instance de FB **opaque** (perte du suivi `FB.Q`) | `docs/STELLARIA-VISION.md`, `docs/STELLARIA-V3.md`, `docs/DECISIONS.md` du dépôt runtime | ADR accepté par `@micka`, avec la mesure de J4.0 en pièce jointe |
+| J4.0 | **Mesurer D2** — **FAIT** (2026-10-02, `npm run debug:index`) : scalaires = listes identiques, composites = comptes divergents (5 vs 3 sur un tableau, `TON1` absent de la table cible) | `scripts/debug-index-order.ts` | sortie de la sonde sur `program-transpiled.st` (5/5 identiques) et `program-array.st` (5 vs 3) ; les deux côtés construits depuis le **même** `.st` |
+| J4.1 | Trancher D2 (ADR) : **(A)** la cible déploie les composites (`plcbuild` énumère les membres de FB/STRUCT — travail runtime) ; **(B)** l'éditeur replie ses feuilles à la granularité déclaration pour la cible v3 ; **(C)** extension `EXT` : la cible publie sa table (`index → nom/type/taille`) et l'éditeur construit son arbre dessus | `docs/STELLARIA-VISION.md`, `docs/DECISIONS.md` du dépôt runtime | ADR + la mesure de J4.0 en pièce jointe |
 | J4.2 | Corriger `P2` (afficher un forçage venu d'ailleurs) selon l'option retenue | `src/frontend/utils/debug-polling-filter.ts:75`, `hooks/use-debug-value.ts`, `services/debug-force-variable.ts`, `_atoms/graphical-editor/debug-value-badge.tsx` | recette § 4.5 étapes 4-6 : la variable apparaît « forcée » **sans action** de l'utilisateur ; relâcher remet l'affichage d'aplomb |
 | J4.3 | Garder le forçage **par adresse** (`%QX/%QW/%MW/%MD/%ML`, entrées en lecture seule) tel quel | `src/backend/editor/modbus/modbus-client.ts:322` (`setVariable`) | § 4.5 étape 7 : écrire `%QX0.0` par adresse, relire par Modbus (FC1) |
 
@@ -437,3 +439,12 @@ Playwright (aucun workflow CI ne le lance ici) :
 
   Conséquence : « suite verte » n'est pas atteignable telle quelle sur ce poste ; ce sont les 6 suites à réparer
   (petit lot séparé, hors périmètre J2) avant de se servir de la suite locale comme porte.
+
+- **J4.0 (2026-10-02)** — sonde `npm run debug:index` (scripts/debug-index-order.ts) : les deux
+  espaces sont bâtis depuis le **même** `program.st`, l'un par STruC++ (pipeline de l'éditeur,
+  appelé directement par la sonde), l'autre par `plcbuild` (`core/POUS.h`). Résultats :
+  scalaires → 5 feuilles / 5 entrées **de même ordre** ; tableau + scalaire → **5 vs 3**
+  (`ARR[0..2]` contre `ARR`) ; `pascal_test.st` → la cible ne liste pas `TON1` du tout.
+  Au passage : pour la cible v3, le pipeline n'écrit **rien** sur disque (`<projet>/build/
+  <cible>/src/` reste vide), donc `openplc-cli debug open` n'a pas de `debug-map.json` à lire
+  — le chemin debug du CLI est inutilisable en v3 aujourd'hui (à traiter en J3).
