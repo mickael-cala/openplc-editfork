@@ -172,6 +172,20 @@ Prochaines etapes, dans l'ordre : (1) instrumenter **correctement** le tout prem
 (3) comparer avec le CLI **packagé** (`openplc-cli`) et sous Linux/CI, ou `docs/CLI.md` consigne le CLI comme
 verifie — l'ecart Windows serait alors isole.
 
+**D6 — le debug compilait avec les en-tetes STruC++ introuvables selon la maniere de lancer l'app (CORRIGE le 2026-10-02).**
+
+Lancee en non-packaged avec `electron release/app` (ou avec le bundle du CLI, `release/app/dist/main/main.js`),
+l'application rapporte `getAppPath()` = ce repertoire-la, et le compilateur y cherchait
+`node_modules/strucpp/src/runtime/include` : absent, donc **toute compilation de debug echouait** avec
+« STruC++ runtime headers not found ... Run "npm run setup:binaries" » pendant que la connexion, le login et le
+reste du flux paraissaient sains. La formule ne marchait que pour `npm run dev` (racine du depot comme app path).
+
+Corrige dans `src/backend/editor/compiler/strucpp-runtime-dir.ts` (resolution a la Node : remonter depuis chaque
+racine plausible - app path puis repertoire courant - et prendre le premier dossier existant) ; le chemin packaged
+(`process.resourcesPath/strucpp/...`) est inchange. Verifie sur le poste : depuis les trois racines possibles, la
+resolution rend `...\oplc-editor-ngv3\node_modules\strucpp\src\runtime\include`, le dossier que
+`npm run setup:strucpp` remplit ; 4 tests unitaires.
+
 ### 1.3 État de J1 (livré) et de l'environnement
 
 - J1 est livré sur cette branche : `dbd397cb9` (auto-update retiré, télémétrie IA droppée,
@@ -579,3 +593,8 @@ Playwright (aucun workflow CI ne le lance ici) :
   supprimées avec ce qui ne les alimentait qu'elles (résolution des capacités, profil Modbus, helper arduino).
   2 141 lignes retirées pour 22 ajoutées. Ce qui reste de ce jalon est de la **suppression pure** (modules
   orphelins, méthodes de port, champs d'arguments mensongers) : aucun changement de comportement attendu.
+
+- **D6 (2026-10-02)** — corrige et verifie : c'est le defaut qui a fait echouer le premier test GUI reel de
+  `@micka` (le login n'y etait pour rien). Recette de l'app construite consignee : `npm run build`, copier le
+  preload dans `release/app/configs/dll/`, puis `electron release/app` — et jamais `npm run dev` sans avoir
+  lance `npm run build:dll` au prealable.

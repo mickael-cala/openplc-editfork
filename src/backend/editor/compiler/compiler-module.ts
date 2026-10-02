@@ -188,6 +188,7 @@ import { formatPackageIntegrityError, PackageManagerModule } from '../package-ma
 import { CreateXMLFile } from '../utils'
 import { createDesktopLibraryBuildPort } from './desktop-library-build-port'
 import { createEditorCompilerPlatformPort } from './editor-compiler-platform-port'
+import { pickStrucppRuntimeDir, strucppRuntimeDirCandidates } from './strucpp-runtime-dir'
 import type { ArduinoCoreControl, CompileProgressChannel, HalsFile } from './types'
 
 interface MethodsResult<T> {
@@ -504,10 +505,21 @@ class CompilerModule {
     //
     // arduino-cli still only ever sees the destination copy under
     // `build/[target]/` after `copyStrucppRuntimeHeaders` runs.
+    //
+    // The dev formula used to be `getAppPath()/node_modules/strucpp/...`,
+    // which is only right when the app was started with the repo root as its
+    // app path (`npm run dev`). Started as the unpackaged app directory —
+    // `electron release/app`, or the CLI's bundle at
+    // `release/app/dist/main/main.js` — `getAppPath()` is that directory
+    // instead, the headers are not below it, and EVERY debug compile failed
+    // with "STruC++ runtime headers not found" while everything else about the
+    // connection looked healthy. Walk up from both roots instead of trusting
+    // one, exactly like Node resolves a module.
     if (electronApp.isPackaged) {
       return join(process.resourcesPath, 'strucpp', 'runtime', 'include')
     }
-    return join(electronApp.getAppPath(), 'node_modules', 'strucpp', 'src', 'runtime', 'include')
+    const candidates = strucppRuntimeDirCandidates([electronApp.getAppPath(), process.cwd()])
+    return pickStrucppRuntimeDir(candidates) ?? candidates[0]
   }
 
   /**
