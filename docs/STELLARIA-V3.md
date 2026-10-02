@@ -40,6 +40,9 @@ adresse fonctionne déjà.
 
 ## Jalons
 
+Roadmap détaillée, état vérifié et recettes de test (runtime Pascal + backend Go) :
+`docs/STELLARIA-V3-ROADMAP.md`.
+
 ### J1 — Fork + couper les services amont ✅ (ce commit)
 
 - [x] `src/main/main.ts` : `electron-updater` retiré (classe `AppUpdater`

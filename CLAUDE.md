@@ -55,9 +55,15 @@ loads the parser through `dist/parser-bundle.cjs` — STruC++'s ESM chain does n
 survive Jest's CJS transform — so the pinned release has to be one that ships
 that bundle, or every suite fails to load. Run the suite again after
 `setup:strucpp` rather than trusting a run made against a patched install.
-The shared surface (`src/frontend`, `src/middleware/shared`, `src/backend/shared`)
-is byte-identical with **openplc-web** — mirror any change and run the check suite
-in BOTH repos (web uses **Vitest**, not Jest, so a test can pass here and fail there).
+**This fork dropped the shared-surface contract on 2026-10-02** (`@micka`): the shared
+trees (`src/frontend`, `src/middleware/shared`, `src/backend/shared`) are ours to change,
+and `openplc-web` is no longer mirrored — `compare-surfaces.py` / `ci-sync.yml` are inert
+here (the sync token was never configured on this fork, and the web repo is not publicly
+reachable). Upstream `Autonomy-Logic/openplc-editor` is tracked **read-only** as a source
+of ideas: `git fetch upstream` then `npm run upstream:triage`, and cherry-pick by hand
+(see `docs/STELLARIA-VISION.md` § 4). A change that used to mean "mirror it in both
+repos" is now a plain change here — and nothing keeps the two suites in step, so an
+upstream fix to shared code has to be re-read rather than merged.
 
 ## Electron e2e (Playwright)
 
@@ -311,8 +317,8 @@ before the pre-build save, the compile and the upload when the project's board
 comes from a vendor package (`BoardInfo.vpp`) and the selected vPLC reports
 `backplaneAccess: false` — only one vPLC per Device may drive the local backplane
 I/O, and the runtime does not enforce it. The rule is `evaluateVppBackplaneGate`
-(`src/middleware/shared/utils/build-gate/vpp-backplane-gate.ts`, byte-identical on
-openplc-web), shared with the board list so both refuse in the same words.
+(`src/middleware/shared/utils/build-gate/vpp-backplane-gate.ts`, mirrored from
+openplc-web at fork time), shared with the board list so both refuse in the same words.
 `evaluatePreBuildPlcGate` beside it is the older gate that asks to stop a running
 PLC, and runs after this one.
 
@@ -325,8 +331,8 @@ A target that reports no flag is not gated, and in the editor that is permanent:
 `EDITOR_CAPABILITIES.hasOrchestratorDevices` is `false` and
 `createEditorOrchestratorAdapter` lists no orchestrators, so nothing ever reaches
 `deviceActions.setSelectedDevice` and `backplaneAccess` is always `undefined`.
-The gate is therefore inert here — it exists so the shared surface stays
-byte-identical with openplc-web, where the flag is real.
+The gate is therefore inert here — it came with the shared surface, where the flag is
+real; now that the fork no longer mirrors openplc-web, it is a removal candidate in J2.
 
 ### Debugging
 
@@ -403,7 +409,8 @@ When adding new code to a covered directory, add tests with it: the directory ha
 ### When bumping the app version:
 `APP_VERSION` in `src/frontend/data/constants/app-version.ts` is the **single
 source of truth** for the human-facing version, shared **byte-for-byte** between
-openplc-editor and openplc-web (enforced by the mirror gate / `compare-surfaces.py`).
+openplc-editor and openplc-web while the two shared a surface; this fork dropped that
+contract on 2026-10-02, so `APP_VERSION` is now this product's version alone.
 The About modal renders it directly; the web build writes it into `version.json`.
 
 **Bump `APP_VERSION` — never `package.json` alone.** Make the identical one-line
@@ -463,8 +470,8 @@ on its `main` push. (Ideally `package.json.version` should be derived from
 
 ### IEC address allocation + alias registry
 
-Located in `src/middleware/shared/utils/iec-address/` (byte-identical on
-openplc-web). Pure functions, no IPC, no electron coupling.
+Located in `src/middleware/shared/utils/iec-address/` (mirrored from openplc-web at fork
+time). Pure functions, no IPC, no electron coupling.
 
 - **Address pool** (`address-pool.ts`): producer-only, target-scoped
   view of every claimed IEC address. Producers = pin mapping, VPP

@@ -36,7 +36,7 @@ le dépôt dédié sera créé).
   `docs/STELLARIA-V3.md` § Simulateur) reste valide dans les trois étapes :
   c'est le même binaire runtime, juste piloté différemment.
 
-## 4. Politique de suivi de l'amont v4
+## 4. Suivi de l'amont, en lecture seule
 
 On **rebase planifié** sur les releases upstream pour récupérer :
 
@@ -50,7 +50,25 @@ On **rebase planifié** sur les releases upstream pour récupérer :
 Méthode : à chaque release amont, relevé des commits « généralistes »
 (titre/ne touche pas `src/backend/shared/compile`, `firmware`, `runtime`,
 `vpp`, `simulator`), rebase de `stellaria/v3-only`, recette de contrat v3
-rejeuée (`docs/STELLARIA-V3.md` § J3).
+rejouée (`docs/STELLARIA-V3.md` § J3).
+
+**Décision du 2026-10-02 : la parité de surface avec openplc-web est abandonnée**
+(`@micka`). Le miroir `compare-surfaces.py` / `ci-sync.yml` ne s'applique plus : le jeton
+de synchro n'a jamais été configuré sur ce fork et le dépôt web n'est pas accessible
+publiquement. Les arbres partagés sont les nôtres, ce qui rend J2 possible — sans cette
+décision, tout retrait dans `src/backend/shared` était un miroir de plus.
+
+Méthode, en **lecture seule** :
+
+    git fetch upstream                  # https://github.com/Autonomy-Logic/openplc-editor (push désactivé)
+    npm run upstream:triage             # 3 seaux : PLC (à ignorer), cloud/IA (à ignorer), généraliste (candidats)
+    npm run upstream:triage -- --mark   # une fois la revue faite : déplace le marqueur .upstream-reviewed
+
+Puis, au cas par cas, `git cherry-pick -x <sha>` (le `-x` garde le sha amont dans le
+message) — **jamais de rebase** : nos retraits entreraient en conflit partout, et un
+commit qui dépend d'un sous-système retiré se reprend comme **idée**, pas comme patch.
+L'amont pousse sur `upstream/development` ; `upstream/main` ne bouge qu'aux releases
+(`HEAD..upstream/main` est vide entre deux versions : surveiller `main` ne dirait rien).
 
 ## 5. Conséquences sur les jalons
 
