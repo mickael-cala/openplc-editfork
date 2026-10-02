@@ -48,13 +48,29 @@ export interface V3ProjectionOptions {
   functionBlockInstances?: ReadonlySet<string>
 }
 
+/** One declaration of the target's table, with what a decoder needs. */
+export interface V3Declaration {
+  /** `INSTANCE0.ARR` — the path the map declares, at declaration granularity. */
+  declaration: string
+  /** The ordinal the target indexes this declaration by. */
+  index: number
+  /** Its type, as `debug-map.json` spells it (no `_ENUM` suffix). */
+  type: string
+  /** Width in bytes: the declaration's first leaf's size (an array's element
+   *  size — the target addresses the whole array, and this is the best the map
+   *  offers for it). */
+  size: number
+}
+
 /**
- * One entry per declaration the target lists, in declaration order, with the
- * ordinal as its index. Returns `[]` for a map with no leaves.
+ * The declarations a v3 target lists, in its order, with their ordinals.
+ *
+ * `projectV3DebugEntries` is this plus the `_ENUM` type suffix the debug tree
+ * expects; the CLI needs the raw type and the size to decode a reply.
  */
-export function projectV3DebugEntries(map: DebugMap, options: V3ProjectionOptions = {}): DebugVariableEntry[] {
+export function projectV3Declarations(map: DebugMap, options: V3ProjectionOptions = {}): V3Declaration[] {
   const fbInstances = options.functionBlockInstances ?? new Set<string>()
-  const entries: DebugVariableEntry[] = []
+  const declarations: V3Declaration[] = []
   const seen = new Set<string>()
 
   for (const leaf of map.leaves) {
@@ -62,15 +78,28 @@ export function projectV3DebugEntries(map: DebugMap, options: V3ProjectionOption
     if (seen.has(declaration) || fbInstances.has(declaration)) continue
     seen.add(declaration)
 
-    entries.push({
-      name: declaration,
-      type: `${leaf.type}_ENUM`,
+    declarations.push({
+      declaration,
       // The target's index is the ordinal of the declaration in its table.
-      index: entries.length,
+      index: declarations.length,
+      type: leaf.type,
+      size: leaf.size,
     })
   }
 
-  return entries
+  return declarations
+}
+
+/**
+ * One entry per declaration the target lists, in declaration order, with the
+ * ordinal as its index. Returns `[]` for a map with no leaves.
+ */
+export function projectV3DebugEntries(map: DebugMap, options: V3ProjectionOptions = {}): DebugVariableEntry[] {
+  return projectV3Declarations(map, options).map((entry) => ({
+    name: entry.declaration,
+    type: `${entry.type}_ENUM`,
+    index: entry.index,
+  }))
 }
 
 /**
