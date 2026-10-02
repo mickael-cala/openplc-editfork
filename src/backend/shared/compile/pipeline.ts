@@ -20,29 +20,13 @@
  * `emit` callback (progress events).  No disk I/O, no globals.
  */
 
-import { buildOpcUaRuntimeConfig, generateOpcUaHeaderContent } from '../../../frontend/utils/opcua'
-import type { S7CommSlaveConfigLike } from '../../../frontend/utils/s7comm'
-import { generateS7CommHeaderContent } from '../../../frontend/utils/s7comm'
-import { isVersionAtLeast } from '../../../frontend/utils/semver'
 import type {
   CompilerPlatformPort,
   PlatformDeviceContext,
   PlatformLog,
-  RuntimeV4Bundle,
 } from '../../../middleware/shared/ports/compiler-platform-port'
 import type { StructuredCompileError } from '../../../middleware/shared/ports/types'
-import { composeRuntimeV4Bundle } from '../../../middleware/shared/utils/library/compose-runtime-v4-bundle'
-import { resolveModbusServerProfile } from '../../../middleware/shared/utils/modbus-server-profile'
-import { resolveTargetCapabilities } from '../../../middleware/shared/utils/target-capabilities'
 import type { BoardHalsCompileEntry } from '../firmware/build-arduino-cli-args'
-import { buildArduinoCliCompileArgs } from '../firmware/build-arduino-cli-args'
-import { isRetainConfigCapableRuntime, MIN_RETAIN_CONFIG_RUNTIME_VERSION } from '../firmware/runtime-version-gate'
-import {
-  describeEditorTooOldForRuntime,
-  describeIncompatibleRuntime,
-  describeVppRuntimeMismatch,
-  isStrucppCompatibleRuntime,
-} from '../firmware/runtime-version-gate'
 import { buildKnownPous, emitCompileErrorEvents } from '../library/program-build-helpers'
 import { runProgramBuildPipeline } from '../library/program-build-pipeline'
 import type { DevicePin } from '../types/PLC/devices'
@@ -52,15 +36,7 @@ import type { DevicePin } from '../types/PLC/devices'
 // (plural `configurations`) and converts at the pipeline entry — see C1
 // in the architectural plan.
 import type { PLCProjectData } from '../types/PLC/open-plc'
-import { materialiseOpcUaCredentials } from './opcua-credentials'
-import { buildCBlocksFromPous, composeFirmwareBundle } from './steps/compose-firmware-bundle'
-import { generateRuntimeConfs } from './steps/generate-confs'
-import { generateDefinesContent } from './steps/generate-defines'
-import { generateRetainConf } from './steps/generate-retain-conf'
-import { generateVppConfigContent } from './steps/generate-vpp-config'
-import { narrowModbusTransports, selectModbusServer } from './steps/modbus-defines'
 import { findEmptyFbdVariables } from './steps/validate-empty-variables'
-import { selectThirdPartyLibraries } from './third-party-libraries'
 
 // ---------------------------------------------------------------------------
 // Public contract
@@ -397,32 +373,25 @@ async function runCompilePipelineInner(
   port: CompilerPlatformPort,
   emit: (event: PipelineProgressEvent) => void,
 ): Promise<RunCompilePipelineResult> {
-  const {
-    projectData,
-    boardTarget,
-    boardRuntime,
-    boardEntry,
-    devicePinMapping,
-    isSimulator,
-    isRuntimeV4,
-    isRuntimeV3,
-    compileOnly,
-    libraryArchives,
-    missingLibraries,
-    firmwareSkeleton,
-    strucppRuntimeHeaders,
-    avrLibStdCppInclude,
-    arduinoCliParallel,
-    deviceContext,
-    communicationPort,
-    runtimeIpAddress,
-    cacheDebugData,
-    vppModbusState,
-    persistentStorage,
-    targetHidesPersistentStorage,
-    vendorScreenData,
-    editorVersion,
-  } = args
+  // ONE target, by construction: this fork serves OpenPLC Runtime v3
+  // (docs/STELLARIA-V3.md). Anything else - the Runtime v4 container, the
+  // in-process simulator, or a board flashed as firmware - is refused HERE, by
+  // name, before any work: those paths were dismantled with strategy 2. A build
+  // that quietly produced artefacts for a target this editor no longer serves
+  // would be worse than a refusal that says which target to pick - and the
+  // Arduino path compiles and flashes for real, so it must fail before anything
+  // is written.
+  if (!args.isRuntimeV3) {
+    const what = args.isRuntimeV4 ? 'Runtime v4' : args.isSimulator ? 'Simulator' : `board "${args.boardTarget}"`
+    return bailError(
+      emit,
+      'validate',
+      `This editor serves OpenPLC Runtime v3 only - "${what}" is no longer supported. Point the project at "OpenPLC Runtime v3".`,
+    )
+  }
+
+  const { projectData, isRuntimeV3, compileOnly, libraryArchives, missingLibraries, deviceContext, cacheDebugData } =
+    args
 
   // Resolve the board's effective capabilities from `boardEntry`.
   // Single source of truth — the same helper that gates the
@@ -430,7 +399,6 @@ async function runCompilePipelineInner(
   // BoardInfoLike, but the runtime shape (capabilities + compiler +
   // optional vpp flag) is compatible — the resolver only reads
   // those fields and treats unknowns as missing.
-  const targetCapabilities = resolveTargetCapabilities(boardEntry as Parameters<typeof resolveTargetCapabilities>[0])
 
   // ---------------------------------------------------------------------
   // Step 0: Use the already-preprocessed project data.
@@ -478,71 +446,6 @@ async function runCompilePipelineInner(
   // carry several on purpose, because a project moves between targets, so the
   // refusal lands here rather than at creation — and it names them, because
   // "only one server is allowed" leaves the user to guess which to turn off.
-  // ---------------------------------------------------------------------
-  const modbusSelection = selectModbusServer(processedData.servers as never)
-  // Only a target that actually builds this firmware can be in conflict. The
-  // simulator and the openplc-compiler runtimes never read the selection, so
-  // refusing their build over two enabled servers would block work on a project
-  // that is merely passing through -- which is the same "a project moves
-  // between targets" reasoning that put the refusal here instead of at creation.
-  const targetServesOneSlave = !isRuntimeV4 && !isSimulator && boardRuntime !== 'openplc-compiler'
-  if (targetServesOneSlave && modbusSelection.conflict) {
-    return bailError(
-      emit,
-      'validate',
-      `Compilation aborted: this target serves one Modbus server, and ${modbusSelection.conflict.join(', ')} are all enabled. Turn off all but one.`,
-    )
-  }
-
-  // ---------------------------------------------------------------------
-  // What the project asks to serve, narrowed to what the board can carry.
-  //
-  // The transports are the project's, the carriers are the board's, and until
-  // now only the SCREEN intersected them: `resolveModbusServerProfile` gated the
-  // UI while the emitter took `server.transports` at face value. So a server
-  // seeded `['tcp']` on a board that ships no Network screen compiled `MBTCP`
-  // and `MBTCP_ETHERNET` into a firmware with no stack -- `ETH.begin()` that
-  // never links -- and no `MBSERIAL` either, leaving the board answering
-  // nothing on either transport while the screen said it was not serving yet.
-  //
-  // Same resolver as the screen, on purpose. Two derivations of this answer is
-  // exactly how the two came to disagree.
-  // ---------------------------------------------------------------------
-  const modbusProfile = resolveModbusServerProfile({
-    compiler: boardEntry.compiler,
-    ...(boardEntry.platform ? { platform: boardEntry.platform } : {}),
-    ...(boardEntry.capabilities ? { capabilities: boardEntry.capabilities } : {}),
-    ...(boardEntry.vppScreenNames
-      ? { vpp: { screens: Object.fromEntries(boardEntry.vppScreenNames.map((name) => [name, true])) } }
-      : {}),
-    ...(boardEntry.networkInterfaces ? { networkInterfaces: boardEntry.networkInterfaces } : {}),
-    ...(boardEntry.serialPorts ? { serialPorts: boardEntry.serialPorts } : {}),
-    ...(boardEntry.defaultSerial ? { defaultSerial: boardEntry.defaultSerial } : {}),
-  })
-
-  // Same gate as the conflict refusal above, and for the same reason: only a
-  // target that builds THIS firmware reads these macros. Runtime v4 serves from
-  // `conf/modbus_slave.json` and the simulator from a fixed block, so narrowing
-  // there would warn about a transport neither of them was going to read --
-  // noise on a project that is merely passing through another target.
-  const modbusServer = !targetServesOneSlave
-    ? modbusSelection.server
-    : narrowModbusTransports(modbusSelection.server, modbusProfile.transports, (dropped) => {
-        // Named, not silent. A dropped transport is the difference between the
-        // firmware the user asked for and the one they get, and on a board with no
-        // console there is nowhere else for them to find out.
-        for (const transport of dropped) {
-          emit({
-            stage: 'validate',
-            level: 'warning',
-            message:
-              transport === 'tcp'
-                ? 'Modbus TCP was requested, but this board declares no network carrier. It was left out of the build.'
-                : 'Modbus RTU was requested, but this board declares no serial transport for it. It was left out of the build.',
-          })
-        }
-      })
-
   // ---------------------------------------------------------------------
   // Step 1: Transpile the project IR straight to Structured Text via
   // the platform port.  Both adapters (editor + web) route through
@@ -627,249 +530,6 @@ async function runCompilePipelineInner(
   }
 
   // ---------------------------------------------------------------------
-  // Step 4a: Runtime v4 branch — compose v4 bundle, run version
-  // check, upload.
-  // ---------------------------------------------------------------------
-  if (isRuntimeV4) {
-    let confs
-    try {
-      emit({ stage: 'confs', message: 'Generating Runtime v4 conf files...', level: 'info' })
-      // Derive each OPC-UA user's stored credential for this target, once,
-      // before anything consumes `servers`. This is the point that knows both
-      // the project and the target, and the storage format is a device property.
-      // See ./opcua-credentials.ts.
-      const opcuaCredentialServers = await materialiseOpcUaCredentials(
-        processedData.servers,
-        targetCapabilities.opcua,
-        (message) => emit({ stage: 'confs', message, level: 'warning' }),
-      )
-
-      confs = generateRuntimeConfs({
-        // generateRuntimeConfs declares a stricter inline server shape than
-        // PLCServer (bufferMapping required, etc.); the cast bridges that
-        // cross-module difference, not the credentials type which is now
-        // concrete.
-        servers: opcuaCredentialServers as never,
-        remoteDevices: processedData.remoteDevices as never,
-        instances: processedData.configuration.resource.instances.map(
-          (inst: { name: string; task: string; program: string }) => ({
-            name: inst.name,
-            task: inst.task,
-            program: inst.program,
-          }),
-        ),
-        debugMapContent: debugMapJson,
-        log: (message, level) => emit({ stage: 'confs', message, level }),
-      })
-    } catch (error) {
-      return bailError(
-        emit,
-        'confs',
-        `Error generating Runtime v4 configs: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
-
-    emit({ stage: 'runtime-v4-bundle', message: 'Composing Runtime v4 upload bundle...', level: 'info' })
-    const userTypeNames = (projectData.dataTypes ?? []).map((dataType) => dataType.name)
-    const cBlocks = buildCBlocksFromPous(originalCppPous as never, userTypeNames)
-    const bundle: RuntimeV4Bundle = composeRuntimeV4Bundle({
-      programSt,
-      md5,
-      strucppFiles: strucppFilesMap,
-      cBlocks: { header: cBlocks.header, code: cBlocks.code },
-      strucppRuntimeHeaders,
-      confs: {
-        modbusSlave: confs.modbusSlave,
-        modbusMaster: confs.modbusMaster,
-        s7Comm: confs.s7Comm,
-        opcUa: confs.opcUa,
-        // `generateRuntimeConfs` validated EtherCAT before returning;
-        // null here means "no EtherCAT devices" → composer skips.
-        ethercat: confs.ethercat ?? '',
-      },
-    })
-    emit({
-      stage: 'runtime-v4-bundle',
-      message: `Runtime v4 bundle composed: ${Object.keys(bundle).length} files`,
-      level: 'info',
-    })
-
-    // VPP boards (those from an installed `.vpp` package) ship a
-    // vendor I/O driver alongside the program.  The platform port's
-    // `packageVppPlugin` returns the extra files to merge in
-    // (driver source under `vpp_plugin/`, the generated plugin
-    // config under `conf/`, and `vpp_plugins.conf` which enables
-    // the driver on the device).  Non-VPP boards return an empty
-    // map and the bundle is unchanged.  Without this, programs
-    // upload but the runtime runs as a generic v4 with no physical
-    // I/O — the diagnostic surface for that failure is silence.
-    const vppResult = await port.packageVppPlugin({ boardTarget }, makePlatformLog(emit, 'runtime-v4-bundle'))
-    if (vppResult.errors && vppResult.errors.length > 0) {
-      return bailError(emit, 'runtime-v4-bundle', 'VPP plugin packaging failed.', vppResult.errors)
-    }
-    const vppFileCount = Object.keys(vppResult.files).length
-    if (vppFileCount > 0) {
-      Object.assign(bundle, vppResult.files)
-      emit({
-        stage: 'runtime-v4-bundle',
-        message: `Merged ${vppFileCount} VPP plugin file(s) into bundle (bundle now ${Object.keys(bundle).length} files)`,
-        level: 'info',
-      })
-    }
-
-    // Persistent storage (RETAIN) settings travel with the program, exactly as
-    // the VPP plugin config above does: the project owns them, the upload
-    // installs them, and the runtime removes its copy when nothing arrives.
-    //
-    // That absent case is why this is a conditional rather than an always-write.
-    // `generateRetainConf` answers null when the project has storage off, or
-    // when the target's VPP handles retention itself — and the runtime reads a
-    // missing retain.conf as "delete the one you have", which is what switches
-    // the built-in file store off and leaves the vendor's driver as the only
-    // store on the box.
-    const retainConf = generateRetainConf({
-      settings: persistentStorage,
-      targetHidesPersistentStorage: targetHidesPersistentStorage ?? false,
-    })
-    if (retainConf !== null) {
-      bundle['retain.conf'] = retainConf
-      emit({
-        stage: 'runtime-v4-bundle',
-        message: 'Generated retain.conf (persistent storage on)',
-        level: 'info',
-      })
-    }
-
-    // Write the bundle out BEFORE the compile-only branch, so `compile` and
-    // `upload` leave the same artifacts on disk. Until this existed, the bundle
-    // only ever reached disk as a side effect of the upload, and a compile-only
-    // v4 build left a build folder holding nothing but the VPP files.
-    if (port.materializeRuntimeV4Bundle) {
-      const materialized = await port.materializeRuntimeV4Bundle({ bundle }, makePlatformLog(emit, 'runtime-v4-bundle'))
-      if (materialized.errors && materialized.errors.length > 0) {
-        return bailError(
-          emit,
-          'runtime-v4-bundle',
-          'Could not write the Runtime v4 build artifacts.',
-          materialized.errors,
-        )
-      }
-      emit({
-        stage: 'runtime-v4-bundle',
-        message: `Wrote ${materialized.written} build artifact(s) to the project build folder`,
-        level: 'info',
-      })
-    }
-
-    if (compileOnly) {
-      emit({ stage: 'done', message: 'Compile only mode — skipping upload to runtime.', level: 'info' })
-      return { success: true, md5, uploaded: false }
-    }
-
-    if (!deviceContext) {
-      emit({
-        stage: 'upload',
-        message: 'Runtime not configured or not logged in. Skipping upload to runtime.',
-        level: 'warning',
-      })
-      return { success: true, md5, uploaded: false }
-    }
-
-    // Strucpp-compatibility gate: a 4.0.x runtime can't load the
-    // strucpp artefacts.  Probe before uploading so the user gets
-    // "upgrade your runtime" instead of a cryptic 500.
-    emit({ stage: 'runtime-version', message: 'Checking runtime version...', level: 'info' })
-    const versionCheck = await port.checkRuntimeVersion(
-      { context: deviceContext },
-      makePlatformLog(emit, 'runtime-version'),
-    )
-    if (!isStrucppCompatibleRuntime(versionCheck.version)) {
-      return bailError(emit, 'runtime-version', describeIncompatibleRuntime(versionCheck.version))
-    }
-
-    // The other direction (DOPE-448): the runtime published a
-    // `minEditorVersion` at `/api/capabilities` and this editor is below
-    // it.  Inert in two independent ways, both of which describe the
-    // world as it is today: `versionCheck.minEditorVersion` is null for
-    // every runtime predating that endpoint, and `editorVersion` is
-    // absent for any caller that hasn't opted in — `isVersionAtLeast`
-    // passes on an absent floor either way.
-    if (editorVersion && !isVersionAtLeast(editorVersion, versionCheck.minEditorVersion)) {
-      return bailError(
-        emit,
-        'runtime-version',
-        describeEditorTooOldForRuntime({
-          runtimeVersion: versionCheck.version,
-          // Narrowed by the guard above: `isVersionAtLeast` only returns
-          // false when it parsed a real floor out of this field.
-          minEditorVersion: versionCheck.minEditorVersion ?? '',
-          editorVersion,
-          // Only the editor's direct-HTTPS context knows an address the
-          // user would recognise; on web the device sits behind an
-          // orchestrator agent, so the message omits the label rather
-          // than printing an agent id nobody can act on.
-          deviceLabel: deviceContext.kind === 'editor-https' ? deviceContext.ip : undefined,
-        }),
-      )
-    }
-
-    // Arc 4 (DOPE-448): the VPP whose HAL is about to be built on this
-    // device declares a runtime floor, and this runtime is below it.
-    // Checked here rather than at install time because the target device
-    // is unknown until the user connects to one — and checked BEFORE the
-    // upload, because the failure mode it prevents is a plugin that
-    // loads on a live PLC and dies at scan time.
-    if (!isVersionAtLeast(versionCheck.version, vppResult.minRuntimeVersion)) {
-      return bailError(
-        emit,
-        'runtime-version',
-        describeVppRuntimeMismatch({
-          boardTarget,
-          minRuntimeVersion: vppResult.minRuntimeVersion ?? '',
-          runtimeVersion: versionCheck.version,
-          deviceLabel: deviceContext.kind === 'editor-https' ? deviceContext.ip : undefined,
-        }),
-      )
-    }
-
-    // Persistent storage was configured, but this runtime has no built-in store
-    // to configure. The upload still succeeds and retain.conf still installs —
-    // an older core simply never reads it, so retention is quietly off. A
-    // warning rather than a refusal: the program is fine, and the user asked
-    // for the upload. Quiet is the one thing this must not be, because the
-    // symptom only appears after a power cycle on a machine already installed.
-    if (bundle['retain.conf'] !== undefined && !isRetainConfigCapableRuntime(versionCheck.version)) {
-      emit({
-        stage: 'runtime-version',
-        message:
-          `This project turns on persistent storage, but the runtime on this device is ` +
-          `${versionCheck.version || 'older than'} — the built-in retain store arrived in ` +
-          `${MIN_RETAIN_CONFIG_RUNTIME_VERSION}. The program will run, but RETAIN variables ` +
-          `will start at their initial values after every restart until the runtime is updated.`,
-        level: 'warning',
-      })
-    }
-
-    emit({ stage: 'upload', message: 'Uploading Runtime v4 bundle...', level: 'info' })
-    const uploadResult = await port.uploadRuntimeV4(
-      {
-        bundle,
-        context: deviceContext,
-        // Answered by the capability probe above, so the upload step does not
-        // have to ask the device a second time -- and does not build a project
-        // archive for a runtime that will discard it.
-        supportsProjectSnapshot: versionCheck.supportsProjectSnapshot,
-      },
-      makePlatformLog(emit, 'upload'),
-    )
-    if (!uploadResult.ok) {
-      return bailError(emit, 'upload', 'Failed to upload to runtime.', uploadResult.errors)
-    }
-    emit({ stage: 'done', message: 'Upload complete.', level: 'info' })
-    return { success: true, md5, uploaded: true }
-  }
-
-  // ---------------------------------------------------------------------
   // Step 4b: Runtime v3 branch — legacy target that ingests a single
   // `program.st` (not a zip).  v3's on-device MatIEC recompiles the ST
   // itself, so this MUST short-circuit BEFORE the arduino-cli path
@@ -923,322 +583,11 @@ async function runCompilePipelineInner(
     return { success: true, md5, uploaded: true }
   }
 
-  // ---------------------------------------------------------------------
-  // Step 4c: Arduino / Simulator path — install core + lib (no-op on
-  // web), generate defines.h, compose firmware bundle, compile via
-  // arduino-cli.
-  // ---------------------------------------------------------------------
-  emit({ stage: 'core-install', message: 'Installing Arduino core...', level: 'info' })
-  const coreInstall = await port.installArduinoCore(
-    {
-      coreId: typeof boardEntry.platform === 'string' ? deriveArduinoCoreFromPlatform(boardEntry.platform) : '',
-      // Pin the exact core version for prebuilt arduino libraries (ABI-locked).
-      ...(boardEntry.coreVersion ? { coreVersion: boardEntry.coreVersion } : {}),
-      // Vendor board-manager index for cores outside arduino-cli's built-in
-      // list.  Resolved from the VPP manifest's `target.boardManagerUrl`; the
-      // editor turns it into `--additional-urls` (and refreshes the index)
-      // so the core can be auto-installed instead of erroring out with
-      // "Platform not found".
-      ...(boardEntry.boardManagerUrl ? { boardManagerUrl: boardEntry.boardManagerUrl } : {}),
-    },
-    makePlatformLog(emit, 'core-install'),
-  )
-  if (!coreInstall.ok) {
-    return bailError(emit, 'core-install', 'Failed to install Arduino core.', coreInstall.errors)
-  }
-
-  // Library install — forward the per-board `extra_libraries` list so
-  // boards that need a specific lib (Arduino_Opta_Blueprint for the
-  // Opta, P1AM for the P1AM board, etc.) get installed when that
-  // board is selected, and boards that don't never download it.
-  //
-  // Install is opportunistic: the editor adapter warns and continues
-  // on `arduino-cli lib install` failure because the library may
-  // already be available from another source the editor doesn't
-  // manage (sketchbook, system-wide install, custom library path).
-  // arduino-cli compile is the source of truth — if a required
-  // header truly can't be resolved, it fails with a precise message
-  // pointing at the file that needed it.  Web's adapter no-ops
-  // entirely (its compile-service backend pre-installs every
-  // library).  Either way `ok` should be true here; the defensive
-  // `!ok` branch below warns and continues if an adapter ever
-  // returns false.
-  emit({ stage: 'lib-install', message: 'Installing Arduino libraries...', level: 'info' })
-  const libInstall = await port.installArduinoLib(
-    {
-      libId: '',
-      extraLibraries: boardEntry.extra_libraries ?? [],
-      // Capability-driven, not board-name-driven: a target gets the OPC-UA stack
-      // because it declares `opcuaServer`.
-      thirdPartyLibraries: selectThirdPartyLibraries(targetCapabilities),
-    },
-    makePlatformLog(emit, 'lib-install'),
-  )
-  if (!libInstall.ok) {
-    emit({
-      stage: 'lib-install',
-      message:
-        'Warning: library install reported a failure. Continuing — arduino-cli compile will surface any genuinely missing headers.',
-      level: 'warning',
-    })
-  }
-
-  // Build defines.h using the shared content authoring step.
-  const definesH = generateDefinesContent({
-    boardEntry,
-    devicePinMapping,
-    stProgramFileContent: programSt,
-    buildMD5Hash: md5,
-    boardRuntime,
-    ...(vppModbusState !== undefined ? { vppModbusState } : {}),
-    ...(modbusServer !== undefined ? { modbusServer } : {}),
-    // Never passed before this, so `DEBUG_IFACE` was always `Serial` and the
-    // "is the server on the default port" test always compared against `Serial`
-    // too. Harmless only for as long as every package declares `Serial`.
-    ...(boardEntry.defaultSerial ? { defaultSerial: boardEntry.defaultSerial } : {}),
-    ...(boardEntry.networkInterfaces ? { networkInterfaces: boardEntry.networkInterfaces } : {}),
-    ...(strucppResult.retainBlobSize !== null ? { retainBlobSize: strucppResult.retainBlobSize } : {}),
-  })
-
-  // A board reached only over Ethernet must never be handed an image with no
-  // network. The firmware brings the link up on OPLC_NET_ENABLED, so its
-  // absence here is the difference between a device that can be reflashed and
-  // one that boots fine and is gone: no debugger, no upload, no discovery, and
-  // nothing on the wire to say why. This was a warning ("Modbus TCP ... was
-  // left out of the build") and the build continued -- which is how a LOGO! got
-  // bricked from a project whose only fault was having no Modbus server.
-  //
-  // Refusing is safe precisely BECAUSE it is recoverable: the user turns the
-  // Network screen on and builds again. Shipping the image is the unrecoverable
-  // direction.
-  if (boardEntry.uploadMethod === 'ethernet' && !definesH.includes('#define OPLC_NET_ENABLED')) {
-    return bailError(
-      emit,
-      'validate',
-      'This board is programmed over Ethernet, so a build with the network disabled could never be ' +
-        'reached again — not by the debugger, the uploader, or Search. Enable the Network screen for ' +
-        'this device and build again.',
-    )
-  }
-
-  // VPP config header — emitted only for arduino-cli targets whose
-  // capabilities flip `vppIo: true` (Arduino Opta + future P1AM).
-  // The header carries every field the user filled on the device's
-  // configuration screens as C preprocessor #defines; the HAL driver
-  // `#include`s it to recover backplane / per-module settings without
-  // a runtime JSON parser.  Non-VPP arduino-cli boards skip emission
-  // and the firmware skeleton's placeholder `vpp_config.h` stays in
-  // place (drivers can still `#include "vpp_config.h"` unconditionally).
-  const vppConfigH = targetCapabilities.vppIo ? generateVppConfigContent({ vendorScreenData }) : undefined
-
-  // OPC-UA config header, emitted only for baremetal targets whose VPP flips
-  // `opcuaServer: true`. Reuses the same resolved address space the Runtime v4
-  // branch hands to `generateRuntimeConfs`, so a variable resolves to one
-  // `(arr, elem)` pair whichever runtime is built. A project with no enabled
-  // server still gets a disabled header, because the runtime includes it always.
-  // The in-process simulator runs USER LOGIC ONLY. It has no Ethernet and no
-  // serial peripheral, so no server it could be handed is reachable — the same
-  // reason Python function blocks are dropped for it.
-  //
-  // It still declares `opcuaServer` / `s7Server` / `modbusTcpServer` in
-  // hals.json, and that is deliberate: those flags keep the server options
-  // offered in the UI so a project authored for Runtime v4 is not stripped of
-  // its configuration while someone simulates it. They answer "may the UI
-  // offer a server?", never "can this firmware host one?".
-  //
-  // Modbus was already excluded this way. OPC-UA and S7 were not, and OPC-UA
-  // failed loudly: `opcua_config.h` came out with `OPCUA_ENABLED 1`, which put
-  // `#include <open62541.h>` in front of a compiler whose library set has no
-  // such header, so every simulator build of a project with an enabled OPC-UA
-  // server died at the preprocessor.
-  const targetHostsServers = !targetCapabilities.isInProcessSimulator
-
-  let opcuaConfigH: string | undefined
-  if (targetCapabilities.opcuaServer && targetCapabilities.opcua && targetHostsServers) {
-    try {
-      // Same derivation as the Runtime v4 branch: the credential this device
-      // stores is this device's property, and here is where the target is known.
-      const opcuaCredentialServers = await materialiseOpcUaCredentials(
-        processedData.servers,
-        targetCapabilities.opcua,
-        (message) => emit({ stage: 'firmware-bundle', message, level: 'warning' }),
-      )
-      const resolvedOpcUa = buildOpcUaRuntimeConfig(
-        opcuaCredentialServers,
-        debugMapJson,
-        processedData.configuration.resource.instances.map((inst: { name: string; task: string; program: string }) => ({
-          name: inst.name,
-          task: inst.task,
-          program: inst.program,
-        })),
-        (message: string) => emit({ stage: 'firmware-bundle', message, level: 'warning' }),
-      )
-      opcuaConfigH = generateOpcUaHeaderContent({
-        resolved: resolvedOpcUa,
-        profile: targetCapabilities.opcua,
-        buildEpochSeconds: Math.floor(Date.now() / 1000),
-        warn: (message) => emit({ stage: 'firmware-bundle', message, level: 'warning' }),
-      })
-    } catch (error) {
-      return bailError(
-        emit,
-        'firmware-bundle',
-        `Error generating OPC-UA config header: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
-  }
-
-  // S7Comm config header, emitted only for baremetal targets whose VPP flips
-  // `s7Server: true`. A project with no enabled S7 server still gets a disabled
-  // header rather than none, because the runtime includes it unconditionally.
-  let s7commConfigH: string | undefined
-  if (targetCapabilities.s7Server && targetCapabilities.s7 && targetHostsServers) {
-    try {
-      // Filter on ENABLED, like the OPC-UA lookup in generate-opcua-config —
-      // otherwise a disabled first S7 server hides an enabled second one, and
-      // the build ships the disabled config.
-      const s7Server = (processedData.servers ?? []).find(
-        (server: { protocol?: string; s7commSlaveConfig?: { server?: { enabled?: boolean } } }) =>
-          server.protocol === 's7comm' && server.s7commSlaveConfig?.server?.enabled,
-      ) as { s7commSlaveConfig?: S7CommSlaveConfigLike } | undefined
-
-      s7commConfigH = generateS7CommHeaderContent({
-        config: s7Server?.s7commSlaveConfig ?? null,
-        profile: targetCapabilities.s7,
-        warn: (message) => emit({ stage: 'firmware-bundle', message, level: 'warning' }),
-      })
-    } catch (error) {
-      return bailError(
-        emit,
-        'firmware-bundle',
-        `Error generating S7Comm config header: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
-  }
-
-  // Compose firmware bundle (firmware skeleton + strucpp output +
-  // c_blocks header/code + defines.h + optional vpp_config.h).
-  // Pure function.
-  emit({ stage: 'firmware-bundle', message: 'Composing firmware bundle...', level: 'info' })
-  const userTypeNames = (projectData.dataTypes ?? []).map((dataType) => dataType.name)
-  const cBlocks = buildCBlocksFromPous(originalCppPous as never, userTypeNames)
-  const firmwareFiles = composeFirmwareBundle({
-    strucppFiles: strucppFilesMap,
-    cBlocks,
-    definesH,
-    vppConfigH,
-    opcuaConfigH,
-    s7commConfigH,
-    firmwareSkeleton,
-  })
-
-  // Build arduino-cli argv via the shared helper.  Same input/output
-  // on both platforms.  `boardEntry` carries `platform` / `core` /
-  // `c_flags` / etc. straight from `hals.json`.
-  const arduinoArgs = buildArduinoCliCompileArgs(boardEntry, {
-    sketchPath: 'examples/Baremetal/Baremetal.ino',
-    libraryPath: 'src',
-    avrLibStdCppInclude,
-    parallel: arduinoCliParallel,
-    // Prebuilt arduino-hal: link the precompiled vendor library alongside the
-    // source integration layer. arduino-cli accepts a 2nd --library.
-    ...(boardEntry.precompiledLibraryDir ? { prebuiltLibraryPath: boardEntry.precompiledLibraryDir } : {}),
-  })
-
-  // Run arduino-cli compile.  Editor: spawns the binary.  Web: HTTP
-  // POST.  Both consume the same `files` map + `argv`.
-  emit({ stage: 'arduino-compile', message: 'Compiling Arduino firmware...', level: 'info' })
-  const compileResult = await port.compileArduino(
-    { files: firmwareFiles, argv: arduinoArgs, parallel: arduinoCliParallel },
-    makePlatformLog(emit, 'arduino-compile'),
-  )
-  if (!compileResult.ok) {
-    if (compileResult.errors && compileResult.errors.length > 0) {
-      emitCompileErrorEvents(
-        compileResult.errors.map((e) => ({ formatted: e.message, raw: e as unknown as never })),
-        (msg, level, compileError) => emit({ stage: 'arduino-compile', message: msg, level, compileError }),
-      )
-    }
-    return bailError(emit, 'arduino-compile', 'Arduino compilation failed', compileResult.errors)
-  }
-
-  // Simulator: avr8js needs the Intel HEX bytes in memory.  The
-  // editor adapter reads `Baremetal.ino.hex` off disk for AVR builds;
-  // if it's missing here the compile silently succeeded but produced
-  // no .hex, which would crash the simulator loader downstream.
-  // Surface a precise error instead.  Non-simulator branches don't
-  // require `binary` — arduino-cli's upload step finds whatever
-  // artefact the core produced (.uf2 / .bin / .hex) on disk directly.
-  if (isSimulator) {
-    if (!compileResult.binary) {
-      return bailError(
-        emit,
-        'arduino-compile',
-        'Simulator build did not produce a .hex artefact.',
-        compileResult.errors,
-      )
-    }
-    emit({ stage: 'done', message: 'Simulator firmware ready', level: 'info' })
-    return { success: true, md5, binary: compileResult.binary, uploaded: false }
-  }
-
-  // Compile-only: skip the physical upload step.
-  if (compileOnly) {
-    emit({ stage: 'done', message: 'Compile only mode — skipping upload to Arduino board.', level: 'info' })
-    return { success: true, md5, binary: compileResult.binary, uploaded: false }
-  }
-
-  // Physical Arduino direct upload.  Uses `communicationPort` (the
-  // user's serial-port pick) — no `deviceContext` involved; that
-  // shape is for the HTTPS/orchestrator runtime-v4 transports, which
-  // already returned above.  Web's `uploadArduinoBoard` adapter
-  // no-ops because web doesn't target physical Arduinos directly.
-  emit({ stage: 'upload', message: 'Uploading firmware to Arduino board...', level: 'info' })
-  const uploadResult = await port.uploadArduinoBoard(
-    {
-      compilationPath: '',
-      fqbn: typeof boardEntry.platform === 'string' ? boardEntry.platform : '',
-      // User-selected serial port from the device-board UI picker.
-      // Forwarded verbatim; the adapter decides what to do if the
-      // caller didn't supply one (editor: fall back to the disk-
-      // persisted value in `devices/configuration.json`).
-      port: communicationPort ?? '',
-      // Upload transport declared by the board's VPP target. Default "serial";
-      // "ethernet" makes the editor pass the device IP as --port.
-      uploadMethod: boardEntry.uploadMethod,
-      // The address the caller asked for -- `openplc-cli --host`, or the
-      // store's value in the GUI. The adapter prefers it over the project
-      // file's persisted `runtimeIpAddress`, which is how a serial port has
-      // always worked and is what makes `--host` mean anything: it reached the
-      // pipeline all along and stopped here.
-      ...(runtimeIpAddress ? { ipAddress: runtimeIpAddress } : {}),
-    },
-    makePlatformLog(emit, 'upload'),
-  )
-  if (!uploadResult.ok) {
-    return bailError(emit, 'upload', 'Failed to upload to Arduino board.', uploadResult.errors)
-  }
-
-  emit({ stage: 'done', message: 'Arduino upload complete.', level: 'info' })
-  return { success: true, md5, binary: compileResult.binary, uploaded: true }
+  /* The guard above admits Runtime v3 only, and that branch always returns.
+   * This line exists so the function has no fall-through path. */
+  return bailError(emit, 'validate', 'Unreachable: this editor serves OpenPLC Runtime v3 only.')
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Derive the arduino-cli core id from a fully-qualified board name.
- *
- *   `'arduino:avr:mega'` → `'arduino:avr'`
- *   `'arduino:samd:zero'` → `'arduino:samd'`
- *
- * Used to pass the core id to `port.installArduinoCore`.  On web
- * (where install is a no-op) this never actually drives anything;
- * on editor it gates arduino-cli's lazy install.
- */
-function deriveArduinoCoreFromPlatform(platform: string): string {
-  const parts = platform.split(':')
-  if (parts.length < 2) return ''
-  return `${parts[0]}:${parts[1]}`
-}
