@@ -203,6 +203,15 @@ export interface UploadRuntimeV3Args {
   context: PlatformDeviceContext
 }
 
+/** The two build inputs the editor's debug index is built from. */
+export interface PersistRuntimeV3SourcesArgs {
+  /** Concatenated `program.st` with embedded C-blocks — what the target
+   *  recompiles for itself. */
+  programSt: string
+  /** STruC++'s `debug-map.json` bytes; empty when the compile produced none. */
+  debugMapJson: string
+}
+
 /** Arduino-CLI core install (editor-only.  Web's adapter MUST
  *  no-op with `{ ok: true }` — web's compiler-service backend
  *  ships with every core preinstalled). */
@@ -407,6 +416,20 @@ export interface CompilerPlatformPort {
   /** Step 13c of the editor pipeline (runtime v3 path).
    *  Web no-ops. */
   uploadRuntimeV3(args: UploadRuntimeV3Args, log: PlatformLog): Promise<UploadResult>
+
+  /**
+   * Persist the sources a Runtime v3 target compiles for itself, under the
+   * build directory (`<project>/build/<target>/src/`).
+   *
+   * The v3 branch writes nothing to disk — the target ingests `program.st` and
+   * recompiles it — which left the editor's own debug index, and the CLI that
+   * reads `debug-map.json` off disk, with nothing to look at: `openplc-cli debug
+   * open` could not work on a v3 project at all.
+   *
+   * Optional: web never targets v3, and a caller that does not implement it
+   * builds exactly as before.
+   */
+  persistRuntimeV3Sources?(args: PersistRuntimeV3SourcesArgs, log: PlatformLog): Promise<void>
 
   /** Pre-upload gate for runtime v4.  Used to short-circuit
    *  uploads to incompatible (pre-4.1.0) runtimes. */

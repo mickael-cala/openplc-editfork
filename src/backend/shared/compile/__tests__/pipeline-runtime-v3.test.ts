@@ -169,4 +169,47 @@ describe('runCompilePipeline — Runtime v3 branch', () => {
 
     expect(result.success).toBe(false)
   })
+
+  /**
+   * The index the editor's debug session — and the CLI — read lives at
+   * `<project>/build/<target>/src/`. Nothing wrote it for v3, so the two inputs
+   * it is built from are handed to the port.
+   */
+  it('persists the sources a v3 target recompiles itself', async () => {
+    const persistRuntimeV3Sources = jest.fn().mockResolvedValue(undefined)
+    const port = makePort({ persistRuntimeV3Sources })
+    const { emit } = captureEvents()
+
+    await runCompilePipeline(makeArgs(), port, emit)
+
+    expect(persistRuntimeV3Sources).toHaveBeenCalledTimes(1)
+    expect(persistRuntimeV3Sources.mock.calls[0][0]).toEqual({
+      programSt: 'PROGRAM main\nEND_PROGRAM',
+      debugMapJson: '{}',
+    })
+  })
+
+  it('persists them in compile-only mode too — that is what the CLI runs', async () => {
+    const persistRuntimeV3Sources = jest.fn().mockResolvedValue(undefined)
+    const port = makePort({ persistRuntimeV3Sources })
+    const { emit } = captureEvents()
+
+    const result = await runCompilePipeline(makeArgs({ compileOnly: true }), port, emit)
+
+    expect(result).toEqual({ success: true, md5: 'a'.repeat(32), uploaded: false })
+    expect(port.uploadRuntimeV3).not.toHaveBeenCalled()
+    expect(persistRuntimeV3Sources).toHaveBeenCalledTimes(1)
+  })
+
+  it('builds without persisting when the port does not implement it (web)', async () => {
+    // `makePort()` carries no `persistRuntimeV3Sources` — the optional-method
+    // contract: a caller that does not implement it builds exactly as before.
+    const port = makePort()
+    const { emit } = captureEvents()
+
+    const result = await runCompilePipeline(makeArgs(), port, emit)
+
+    expect(result.success).toBe(true)
+    expect(port.persistRuntimeV3Sources).toBeUndefined()
+  })
 })

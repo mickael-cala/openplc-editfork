@@ -492,3 +492,14 @@ Playwright (aucun workflow CI ne le lance ici) :
   verdict « identical order » dans les deux cas ; **FB utilisateur** → D4 (défaut `plcbuild`).
   Reste J3 : persister `program.st` + `debug-map.json` sous `<projet>/build/<cible>/src/` pour que
   le CLI (et `src/cli/debug/variables.ts`) voie la même table que la GUI.
+
+- **J3-a (2026-10-02)** — les entrees de build v3 sont desormais ecrites sous
+  `<projet>/build/<cible>/src/` : `CompilerPlatformPort.persistRuntimeV3Sources` (optionnelle) est
+  appelee par la branche v3 **avant** le retour compile-only (`openplc-cli compile` est exactement ce
+  cas), et l'adaptateur editeur y ecrit `program.st` + `debug-map.json` (un echec n'echoue pas le
+  build : ces deux fichiers sont ce que le debugger relit). Verifie de bout en bout avec le CLI dev :
+  « Build inputs written to ...\build\OpenPLC Runtime v3\src », 5 feuilles, md5 93f2074a...
+  Au passage, la carte reelle enterine la correction de D2 : le `program.st` transpile declare
+  `ticks` **en premier** et la carte est `TICKS, DEMARRER, LED, CLIGNOTE, SECONDES` — soit l'ordre
+  exact de `core/POUS.h` cote cible. Les deux espaces coincident des lors qu'ils partent du meme
+  source **transpile** ; l'« ecart d'ordre » initial venait bien de la methode de comparaison.

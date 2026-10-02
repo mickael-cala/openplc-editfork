@@ -890,6 +890,14 @@ async function runCompilePipelineInner(
   // upload it verbatim.
   // ---------------------------------------------------------------------
   if (isRuntimeV3) {
+    // The editor's debug session, and the CLI, read the index off disk
+    // (`<project>/build/<target>/src/debug-map.json`), and this branch writes
+    // nothing there: the target recompiles the ST for itself. Persist the two
+    // inputs the index is built from — before the compile-only return, because
+    // `openplc-cli compile` is exactly that case.
+    if (port.persistRuntimeV3Sources) {
+      await port.persistRuntimeV3Sources({ programSt, debugMapJson }, makePlatformLog(emit, 'st'))
+    }
     if (compileOnly) {
       emit({ stage: 'done', message: 'Compile only mode — skipping upload to runtime v3.', level: 'info' })
       return { success: true, md5, uploaded: false }

@@ -596,6 +596,32 @@ export function createEditorCompilerPlatformPort(
     },
 
     /**
+     * Write the v3 build inputs where the editor's debug session — and the
+     * CLI — look for them (`<project>/build/<target>/src/`).
+     *
+     * `openplc-cli debug open` reads `debug-map.json` from that directory, and
+     * nothing ever wrote it for a v3 target: the pipeline sends `program.st`
+     * and the target recompiles it, so the index the editor itself needs was
+     * only ever in memory.
+     *
+     * A failure here must not fail the build: the program is on its way to the
+     * device, and these two files are what the debugger reads back.
+     */
+    async persistRuntimeV3Sources({ programSt, debugMapJson }, log: PlatformLog): Promise<void> {
+      try {
+        await fs.mkdir(context.sourceTargetFolderPath, { recursive: true })
+        await fs.writeFile(join(context.sourceTargetFolderPath, 'program.st'), programSt, 'utf8')
+        if (debugMapJson) {
+          await fs.writeFile(join(context.sourceTargetFolderPath, 'debug-map.json'), debugMapJson, 'utf8')
+        }
+        log(`Build inputs written to ${context.sourceTargetFolderPath}`, 'info')
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        log(`Could not write the v3 build inputs: ${message}`, 'warning')
+      }
+    },
+
+    /**
      * Probe the device (unauthenticated) so the pipeline can
      * short-circuit uploads in both directions: to a runtime too old
      * for this editor, and from an editor too old for this runtime.
