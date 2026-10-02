@@ -286,9 +286,21 @@ const WorkspaceScreen = () => {
     ): Promise<void> => {
       const keyForIndexLookup = lookupKey ?? compositeKey
       const variableIndex = debugVariableIndexes.get(keyForIndexLookup)
-      if (variableIndex === undefined) return
+      if (variableIndex === undefined) {
+        // This used to be a bare `return`: the Force menu entry did nothing at
+        // all, and nothing said why. Name the variable and the reason instead.
+        const message = `Force ignored for ${keyForIndexLookup}: the debug session has no index for it.`
+        addLog({ level: 'error', message })
+        toast({ title: 'Force ignored', description: message, variant: 'fail' })
+        return
+      }
 
-      if (!debuggerPort.isConnected()) return
+      if (!debuggerPort.isConnected()) {
+        const message = `Force ignored for ${keyForIndexLookup}: the debugger is not connected.`
+        addLog({ level: 'error', message })
+        toast({ title: 'Force ignored', description: message, variant: 'fail' })
+        return
+      }
 
       if (value === undefined && valueBuffer === undefined) {
         await releaseDebugVariable(debuggerPort, compositeKey, variableIndex)
@@ -298,7 +310,7 @@ const WorkspaceScreen = () => {
         await forceDebugVariable(debuggerPort, compositeKey, variableIndex, buffer, value ?? true, variableType)
       }
     },
-    [debugVariableIndexes, debuggerPort],
+    [addLog, debugVariableIndexes, debuggerPort],
   )
 
   const [graphList, _setGraphList] = useState<string[]>([])
