@@ -222,7 +222,7 @@ Ordre imposé par le risque : d'abord ce qui **empêche** de tester (D1), puis c
 |---|---|---|---|
 | J4.0 | **Mesurer D2** — **FAIT** (2026-10-02, `npm run debug:index`) : scalaires = listes identiques, composites = comptes divergents (5 vs 3 sur un tableau, `TON1` absent de la table cible) | `scripts/debug-index-order.ts` | sortie de la sonde sur `program-transpiled.st` (5/5 identiques) et `program-array.st` (5 vs 3) ; les deux côtés construits depuis le **même** `.st` |
 | J4.1 | Trancher D2 — **TRANCHÉE le 2026-10-02** (`@micka`) : **(B) tout de suite** (l'éditeur replie ses feuilles à la granularité « déclaration », comptes alignés, composites opaques) **avec (C) comme cible** (la cible publie sa table `index → nom/type/taille` ; ADR côté runtime à écrire). **(A) écartée** : travail runtime le plus lourd, et il faudrait y rejouer les dispositions de FB des bibliothèques | (B) : `src/frontend/utils/debug-v3-projection.ts` + `useDebugSession.ts:96` ; (C) : `docs/DECISIONS.md` du dépôt runtime | (B) cœur **fait** : `projectV3DebugEntries` + 11 tests, dont les deux cas mesurés (scalaires 5/5, tableau → LED/ARR/N renumérotés) ; restent le calcul des instances de FB et le branchement |
-| J4.2 | Corriger `P2` (afficher un forçage venu d'ailleurs) selon l'option retenue | `src/frontend/utils/debug-polling-filter.ts:75`, `hooks/use-debug-value.ts`, `services/debug-force-variable.ts`, `_atoms/graphical-editor/debug-value-badge.tsx` | recette § 4.5 étapes 4-6 : la variable apparaît « forcée » **sans action** de l'utilisateur ; relâcher remet l'affichage d'aplomb |
+| J4.2 | Corriger `P2` (afficher un forcage venu d'ailleurs) — **FAIT** (2026-10-02) : le backend garde un registre (`WS-109`, `GET /api/force`, livre dans `openplc-go-backend`) et l'editeur le consomme a l'ouverture d'une session v3 (`RuntimeApiClient.getForceRegistry` -> IPC `runtime:force-registry` -> `RuntimePort` -> `useDebugSession`, fusion dans `debugForcedVariables` par `mergeExternalForces`) | `runtime-api-client.ts`, `main.ts`, `renderer.ts`, `runtime-port.ts`, `runtime-adapter.ts`, `debug-v3-projection.ts`, `useDebugSession.ts` | 105 tests cibles + 866 tests sur les zones touchees ; e2e : login HTTPS 8443 puis `getForceRegistry` -> `{index:1, type:BOOL, value:1}` pour un forcage fait par `POST /api/force` |
 | J4.3 | Garder le forçage **par adresse** (`%QX/%QW/%MW/%MD/%ML`, entrées en lecture seule) tel quel | `src/backend/editor/modbus/modbus-client.ts:322` (`setVariable`) | § 4.5 étape 7 : écrire `%QX0.0` par adresse, relire par Modbus (FC1) |
 
 ### J5 — packaging, identité, diète d'installation
@@ -552,3 +552,11 @@ Playwright (aucun workflow CI ne le lance ici) :
   arretes, ports 502/43628/8080/8443 liberes ; le repertoire temoin
   `C:\Users\micka\gh\d2-probe` et les fixtures `st_files/d2_*.st` du depot runtime sont **effaces**,
   et `core/` y a ete recompile sur `pascal_test.st` (etat du depot).
+
+- **J4.2 (2026-10-02)** — `P2` livre de bout en bout : le backend Go garde desormais le registre de ce
+  qu'il a force (`WS-109`, `GET /api/force`, vide au changement de programme et a l'arret) et l'editeur
+  le fusionne dans `debugForcedVariables` a l'ouverture de la session v3, en traduisant chaque ordinal de la
+  cible vers la cle composite de l'arbre (`declarationCompositeKey`, casse exacte). Le critere P2.4 est
+  atteint cote logique : la variable apparait forcee sans action de l'utilisateur ; reste la verification
+  visuelle IHM (Playwright) a faire lors d'une session avec fenetre. Machine laissee propre : PLC arrete
+  avant le backend, ports 502/43628/8080/8443 liberes, aucune fixture residuelle.

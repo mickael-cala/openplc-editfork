@@ -125,6 +125,24 @@ export interface RuntimeStatusResult {
   error?: string
 }
 
+/** One entry of the backend's force registry (WS-109). */
+export interface ForceRegistryEntry {
+  /** Index in the target's debug table — the v3 ordinal space. */
+  index: number
+  /** IEC type the value was encoded from (e.g. `BOOL`, `UINT`). */
+  type: string
+  /** The value as the caller wrote it (e.g. `"1"`, `"TRUE"`). */
+  value: string
+}
+
+export interface ForceRegistryResult {
+  success: boolean
+  /** Program fingerprint the registry belongs to; forces older than it are stale. */
+  md5?: string
+  forces?: ForceRegistryEntry[]
+  error?: string
+}
+
 export interface CompilationStatusResult {
   success: boolean
   data?: {
@@ -364,6 +382,15 @@ export interface RuntimePort {
 
   /** Get current PLC runtime status with optional timing statistics. */
   getStatus(includeStats?: boolean): Promise<RuntimeStatusResult>
+
+  /**
+   * The forces the BACKEND remembers having made (WS-109).
+   *
+   * The runtime never reports who forced a variable, so this registry is the
+   * only way the UI can show a force that was made from the web interface.
+   * The editor's own forces live in its store and never go through here.
+   */
+  getForceRegistry(): Promise<ForceRegistryResult>
 
   /** Start the PLC program on the runtime.  `status`, when present,
    *  carries the raw `status` field of the runtime's response body

@@ -19,6 +19,7 @@ beforeEach(() => {
     runtimeUpdateUser: jest.fn().mockResolvedValue({ success: true }),
     runtimeDeleteUser: jest.fn().mockResolvedValue({ success: true }),
     runtimeGetStatus: jest.fn().mockResolvedValue({ success: true, status: 'RUNNING' }),
+    getForceRegistry: jest.fn().mockResolvedValue({ success: true, forces: [] }),
     runtimeStartPlc: jest.fn().mockResolvedValue({ success: true }),
     runtimeStopPlc: jest.fn().mockResolvedValue({ success: true }),
     runtimeGetLogs: jest.fn().mockResolvedValue({ success: true, logs: [] }),
@@ -283,6 +284,15 @@ describe('getStatus', () => {
     const result = await adapter.getStatus()
 
     expect(result).toEqual({ success: false, error: 'Network error' })
+  })
+})
+
+describe('getForceRegistry', () => {
+  it('delegates to the bridge with the configured IP (WS-109)', async () => {
+    const result = await adapter.getForceRegistry()
+
+    expect(result.success).toBe(true)
+    expect(window.bridge.getForceRegistry).toHaveBeenCalledWith('192.168.1.100')
   })
 })
 

@@ -13,11 +13,17 @@
 import { useCallback, useRef } from 'react'
 
 import type { DebugTreeNode, FbInstanceInfo } from '../../middleware/shared/ports/types'
-import { useDebugger } from '../../middleware/shared/providers'
+import { useDebugger, useRuntime } from '../../middleware/shared/providers'
 import { resolveTargetCapabilities } from '../../middleware/shared/utils/target-capabilities'
 import { useOpenPLCStore } from '../store'
 import { parseDebugMap } from '../utils/debug-parser'
-import { functionBlockInstancePaths, projectV3DebugEntries } from '../utils/debug-v3-projection'
+import {
+  declarationCompositeKey,
+  functionBlockInstancePaths,
+  mergeExternalForces,
+  projectV3DebugEntries,
+  projectV3Declarations,
+} from '../utils/debug-v3-projection'
 import {
   buildDebugVariableTreeMap,
   buildFbInstanceMap,
@@ -51,6 +57,7 @@ export interface UseDebugSessionReturn {
 
 export function useDebugSession(): UseDebugSessionReturn {
   const debuggerPort = useDebugger()
+  const runtimePort = useRuntime()
 
   const {
     project: { data: projectData, meta: projectMeta },
@@ -161,6 +168,36 @@ export function useDebugSession(): UseDebugSessionReturn {
 
       // Derive the composite-key → packed-address map from the tree leaves.
       const indexMap = deriveVariableIndexMap(treeMap, debugMap)
+
+      // A force made from the web interface lives in the BACKEND's registry
+      // (the runtime never says who forced what). Read it once when the session
+      // opens and mark those variables as forced; the polling loop then shows
+      // the value the target actually serves. Failures are cosmetic — the
+      // editor's own forces, and the debug channel, are unaffected.
+      if (targetIndexesByOrdinal) {
+        try {
+          const registry = await runtimePort.getForceRegistry()
+          if (registry.success && registry.forces !== undefined && registry.forces.length > 0) {
+            const functionBlockInstances = functionBlockInstancePaths(
+              debugPous,
+              instances,
+              useOpenPLCStore.getState().libraries.system,
+            )
+            const indexToKey = new Map<number, string>()
+            for (const declaration of projectV3Declarations(debugMap, { functionBlockInstances })) {
+              const key = declarationCompositeKey(declaration.declaration, debugPous, instances)
+              if (key !== undefined) indexToKey.set(declaration.index, key)
+            }
+            const state = useOpenPLCStore.getState()
+            state.workspaceActions.setDebugForcedVariables(
+              mergeExternalForces(state.workspace.debugForcedVariables, registry.forces, indexToKey),
+            )
+          }
+        } catch {
+          // The backend may predate WS-109; nothing about the session depends
+          // on this registry.
+        }
+      }
 
       // Build FB instance map
       const fbDebugInstancesMap = buildFbInstanceMap(debugPous, instances)

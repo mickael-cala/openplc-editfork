@@ -63,6 +63,20 @@ const PlcStatusResponseSchema = z.object({
   switchPosition: z.string().optional(),
 })
 
+const ForceRegistryEntrySchema = z.object({
+  index: z.number().int().nonnegative(),
+  type: z.string(),
+  value: z.string(),
+})
+
+/** `GET /api/force` on a backend that keeps a force registry (WS-109). */
+export const ForceRegistrySchema = z.object({
+  md5: z.string(),
+  forces: z.array(ForceRegistryEntrySchema),
+})
+
+export type ForceRegistry = z.infer<typeof ForceRegistrySchema>
+
 const ProjectSnapshotBodySchema = z.object({
   projectName: z.string(),
   contentBase64: z.string(),
@@ -779,6 +793,28 @@ export class RuntimeApiClient {
   /** Run state and mode-switch position. */
   getStatus(address: string): Promise<{ success: boolean; status?: string; switchPosition?: string; error?: string }> {
     return this.statusCommand(address, '/api/status')
+  }
+
+  /**
+   * What the BACKEND remembers having forced (WS-109).
+   *
+   * The runtime never reports who forced a variable — the 0x41..0x45 protocol
+   * has no "forced" bit — so this registry is the only source of truth for a
+   * force made from the web interface. The editor's own forces live in its
+   * store and do not need it.
+   */
+  async getForceRegistry(
+    address: string,
+  ): Promise<{ success: boolean; md5?: string; forces?: ForceRegistry['forces']; error?: string }> {
+    try {
+      const result = await this.makeRuntimeApiRequest<ForceRegistry>(address, '/api/force', (data: string) => {
+        return ForceRegistrySchema.safeParse(parseJsonOrNull(data)).data ?? { md5: '', forces: [] }
+      })
+      if (!result.success) return { success: false, error: result.error }
+      return { success: true, md5: result.data?.md5, forces: result.data?.forces ?? [] }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
   }
 
   /**

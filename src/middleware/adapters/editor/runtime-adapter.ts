@@ -24,6 +24,7 @@ import type {
   DiscoverDevicesResult,
   DiscoveredRuntimeDevice,
   FetchedProject,
+  ForceRegistryResult,
   ListUsersResult,
   LoginParams,
   LoginResult,
@@ -217,6 +218,15 @@ export function createEditorRuntimeAdapter(getIpAddress: () => string): RuntimeP
       try {
         const ip = requireIp()
         return await window.bridge.runtimeGetStatus(ip, includeStats)
+      } catch (err) {
+        return { success: false, error: getErrorMessage(err) }
+      }
+    },
+
+    async getForceRegistry(): Promise<ForceRegistryResult> {
+      try {
+        const ip = requireIp()
+        return await window.bridge.getForceRegistry(ip)
       } catch (err) {
         return { success: false, error: getErrorMessage(err) }
       }

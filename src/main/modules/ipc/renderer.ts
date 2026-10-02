@@ -764,6 +764,15 @@ const rendererProcessBridge = {
     switchPosition?: 'run' | 'stop'
     error?: string
   }> => ipcRenderer.invoke('runtime:get-status', ipAddress, includeStats),
+  /** Forces the backend remembers having made (WS-109) — see `getForceRegistry`. */
+  getForceRegistry: (
+    ipAddress: string,
+  ): Promise<{
+    success: boolean
+    md5?: string
+    forces?: Array<{ index: number; type: string; value: string }>
+    error?: string
+  }> => ipcRenderer.invoke('runtime:force-registry', ipAddress),
   runtimeStartPlc: (ipAddress: string): Promise<{ success: boolean; error?: string; status?: string }> =>
     ipcRenderer.invoke('runtime:start-plc', ipAddress),
   runtimeStopPlc: (ipAddress: string): Promise<{ success: boolean; error?: string }> =>

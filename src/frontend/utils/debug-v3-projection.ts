@@ -137,3 +137,50 @@ export function functionBlockInstancePaths(
 
   return paths
 }
+
+/**
+ * The composite key the editor's UI uses for a declaration of an instance —
+ * `INSTANCE0.LED` plus the project gives `main:led`, in the casing the tree
+ * declares it. The store keys are minted by the tree, so anything that wants
+ * to be looked up by `use-debug-value` must match that casing exactly.
+ */
+export function declarationCompositeKey(
+  declaration: string,
+  pous: PLCPou[],
+  instances: PLCInstance[],
+): string | undefined {
+  const [instanceName, ...members] = declaration.split('.')
+  const instance = instances.find((candidate) => candidate.name.toUpperCase() === instanceName.toUpperCase())
+  if (!instance || members.length !== 1) return undefined
+  const program = pous.find(
+    (pou) =>
+      normalizeTypeString(pou.pouType) === 'program' && pou.name.toUpperCase() === instance.program.toUpperCase(),
+  )
+  if (!program) return undefined
+  const variable = program.interface?.variables.find(
+    (candidate) => candidate.name.toUpperCase() === members[0].toUpperCase(),
+  )
+  if (!variable) return undefined
+  return `${program.name}:${variable.name}`
+}
+
+/**
+ * Mark the variables the BACKEND forced, on top of the editor's own.
+ *
+ * `current` is the store's `debugForcedVariables`; `forces` is the registry the
+ * backend published (WS-109); `indexToKey` maps the target's ordinals to the
+ * composite keys the tree uses. An index with no key (a composite the editor
+ * cannot address) is dropped rather than guessed at.
+ */
+export function mergeExternalForces(
+  current: ReadonlyMap<string, boolean>,
+  forces: ReadonlyArray<{ index: number; type: string; value: string }>,
+  indexToKey: ReadonlyMap<number, string>,
+): Map<string, boolean> {
+  const next = new Map(current)
+  for (const force of forces) {
+    const key = indexToKey.get(force.index)
+    if (key !== undefined) next.set(key, true)
+  }
+  return next
+}

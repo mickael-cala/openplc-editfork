@@ -7,7 +7,13 @@
 import type { SystemLibrary } from '../../../middleware/shared/ports/library-types'
 import type { PLCInstance, PLCPou } from '../../../middleware/shared/ports/types'
 import type { DebugMap } from '../debug-parser'
-import { declarationPathOf, functionBlockInstancePaths, projectV3DebugEntries } from '../debug-v3-projection'
+import {
+  declarationCompositeKey,
+  declarationPathOf,
+  functionBlockInstancePaths,
+  mergeExternalForces,
+  projectV3DebugEntries,
+} from '../debug-v3-projection'
 
 function mapOf(...leaves: Array<{ path: string; type: string }>): DebugMap {
   return {
@@ -155,5 +161,55 @@ describe('functionBlockInstancePaths', () => {
       [],
     )
     expect([...functionBlockInstancePaths(pous, instances, [tonLibrary])]).toEqual(['INSTANCE0.TON1'])
+  })
+})
+
+describe('declarationCompositeKey', () => {
+  const program = (name: string, variables: string[]) =>
+    ({
+      name,
+      pouType: 'program',
+      interface: { variables: variables.map((variable) => ({ name: variable, class: 'local', type: { definition: 'base-type', value: 'BOOL' } })) },
+    }) as unknown as PLCPou
+
+  it('maps a declaration onto the composite key, in the tree casing', () => {
+    const pous = [program('main', ['led', 'ticks'])]
+    const instances = [{ name: 'instance0', program: 'main', task: 'task0' }]
+
+    expect(declarationCompositeKey('INSTANCE0.LED', pous, instances)).toBe('main:led')
+    expect(declarationCompositeKey('INSTANCE0.TICKS', pous, instances)).toBe('main:ticks')
+  })
+
+  it('keeps the declared casing — the store keys are case-sensitive', () => {
+    const pous = [program('Main', ['LED'])]
+    const instances = [{ name: 'instance0', program: 'Main', task: 'task0' }]
+
+    expect(declarationCompositeKey('INSTANCE0.LED', pous, instances)).toBe('Main:LED')
+  })
+
+  it('answers undefined for an unknown instance or a member of a composite', () => {
+    const pous = [program('main', ['led'])]
+    const instances = [{ name: 'instance0', program: 'main', task: 'task0' }]
+
+    expect(declarationCompositeKey('OTHER.LED', pous, instances)).toBeUndefined()
+    expect(declarationCompositeKey('INSTANCE0.TON1.Q', pous, instances)).toBeUndefined()
+  })
+})
+
+describe('mergeExternalForces', () => {
+  it('marks the backend-forced variables, keeps the editor own, drops unknown indexes', () => {
+    const current = new Map([['main:ticks', true]])
+    const forces = [
+      { index: 1, type: 'BOOL', value: '1' },
+      { index: 9, type: 'UINT', value: '7' },
+    ]
+    const indexToKey = new Map([[1, 'main:led']])
+
+    const merged = mergeExternalForces(current, forces, indexToKey)
+
+    expect(merged.get('main:ticks')).toBe(true)
+    expect(merged.get('main:led')).toBe(true)
+    expect(merged.has('main:unknown')).toBe(false)
+    expect(merged.size).toBe(2)
   })
 })

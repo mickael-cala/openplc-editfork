@@ -514,6 +514,10 @@ class MainProcessBridge implements MainIpcModule {
     }
   }
 
+  handleRuntimeGetForceRegistry = async (_event: IpcMainInvokeEvent, ipAddress: string) => {
+    return this.runtimeApi.getForceRegistry(ipAddress)
+  }
+
   handleRuntimeStartPlc = (_event: IpcMainInvokeEvent, ipAddress: string) => this.restStartPlc(ipAddress)
 
   handleRuntimeStopPlc = async (_event: IpcMainInvokeEvent, ipAddress: string) => {
@@ -987,6 +991,7 @@ class MainProcessBridge implements MainIpcModule {
     this.registerHandle('runtime:delete-user', this.handleRuntimeDeleteUser)
     this.registerHandle('runtime:login', this.handleRuntimeLogin)
     this.registerHandle('runtime:get-status', this.handleRuntimeGetStatus)
+    this.registerHandle('runtime:force-registry', this.handleRuntimeGetForceRegistry)
     this.registerHandle('runtime:start-plc', this.handleRuntimeStartPlc)
     this.registerHandle('runtime:stop-plc', this.handleRuntimeStopPlc)
     this.registerHandle('runtime:get-compilation-status', this.handleRuntimeGetCompilationStatus)
