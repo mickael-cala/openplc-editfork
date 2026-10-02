@@ -695,3 +695,14 @@ status` propre dans les trois depots.
   le journal dit lequel. Mesure : copie manuelle **supprimee**, relance -> `Main window preload:`
   `.../dist/main/preload.js` puis `Splash screen loaded successfully`, la ou les lancements precedents
   affichaient tous `Error loading splash screen: ERR_FILE_NOT_FOUND`.
+- **2026-10-02, le forcage est prouve correct de bout en bout -- c'est l'AFFICHAGE qui manque.** Rapport
+  de `@micka` : « pour false ca fonctionne partout mais pas pour forcer a true ». Sonde ajoutee
+  (`npm run debug:force-probe`, `scripts/debug-force-probe.ts`) : elle conduit le client et l'encodeur
+  de l'EDITEUR contre la cible en marche, sans I-HM. Resultat mesure : les trames sont bonnes
+  (`42 00 00 02 01 00 01 01` pour true, `... 00` pour false, `... 00 00 01 00` pour un relachement),
+  `setVariable` rend `success` dans les trois cas, et la relecture suit (`01`, `00`, `00`). Surtout :
+  AVANT tout geste de la sonde, l'index 2 se lisait deja `01` -- le forcage a TRUE de `@micka` etait
+  donc bien pose sur la cible et **tenait**. Le defaut restant n'est ni le transport, ni la cible, ni le
+  backend : c'est ce que l'editeur MONTRE d'un forcage a true (valeur du panneau, mise en evidence de
+  l'echelle, oscilloscope). Prochain sprint : fermer cette boucle d'affichage, la sonde servant de
+  reference.

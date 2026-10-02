@@ -36,7 +36,8 @@
     "test:watch": "jest --watch --no-coverage",
     "test:e2e": "npm run build && npx playwright test",
     "validate:arch": "npx tsx src/__architecture__/validate.ts",
-    "prepare": "husky"
+    "prepare": "husky",
+    "debug:force-probe": "ts-node -r tsconfig-paths/register scripts/debug-force-probe.ts"
   },
   "browserslist": [],
   "dependencies": {
