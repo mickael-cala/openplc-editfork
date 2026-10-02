@@ -19,6 +19,7 @@ import { useOpenPLCStore } from '../store'
 import { parseDebugMap } from '../utils/debug-parser'
 import {
   applyExternalForces,
+  areForcedMapsEqual,
   declarationCompositeKey,
   functionBlockInstancePaths,
   projectV3DebugEntries,
@@ -105,7 +106,13 @@ export function useDebugSession(): UseDebugSessionReturn {
         indexToKey,
       )
       externalForcesRef.current = applied.external
-      state.workspaceActions.setDebugForcedVariables(applied.forced)
+      // Publish ONLY a real change: this map is one of the values the polling
+      // loop watches to invalidate its active-index cache, and that cache is
+      // meant to change on user action — not every two seconds. An equal write
+      // here stalls the poller and the displayed values stop following.
+      if (!areForcedMapsEqual(state.workspace.debugForcedVariables, applied.forced)) {
+        state.workspaceActions.setDebugForcedVariables(applied.forced)
+      }
     } catch {
       // See above.
     }

@@ -207,3 +207,21 @@ export function applyExternalForces(
 
   return { forced, external }
 }
+
+/**
+ * Whether two forced-variable maps say the same thing.
+ *
+ * The registry refresh runs on a timer, and `setDebugForcedVariables` is one of
+ * the values the polling loop watches to invalidate its "what should I read
+ * next" cache — a cache the poller explicitly expects to change on user action,
+ * not on a clock. Writing a fresh, equal Map every couple of seconds therefore
+ * made the poller rebuild that set continuously and the displayed values
+ * stopped following the target. Only a real change may be published.
+ */
+export function areForcedMapsEqual(a: ReadonlyMap<string, boolean>, b: ReadonlyMap<string, boolean>): boolean {
+  if (a.size !== b.size) return false
+  for (const [key, value] of a) {
+    if (b.get(key) !== value) return false
+  }
+  return true
+}

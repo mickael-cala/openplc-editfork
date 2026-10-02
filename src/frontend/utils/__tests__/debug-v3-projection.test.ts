@@ -9,6 +9,7 @@ import type { PLCInstance, PLCPou } from '../../../middleware/shared/ports/types
 import type { DebugMap } from '../debug-parser'
 import {
   applyExternalForces,
+  areForcedMapsEqual,
   declarationCompositeKey,
   declarationPathOf,
   functionBlockInstancePaths,
@@ -238,5 +239,22 @@ describe('applyExternalForces', () => {
     expect(forced.has('main:led')).toBe(false)
     expect(forced.get('main:ticks')).toBe(true)
     expect(external.size).toBe(0)
+  })
+})
+
+/**
+ * The regression this pins: the registry refresh runs on a timer, and writing
+ * an equal-but-new Map every tick made the polling loop rebuild its active set
+ * continuously, so the displayed values stopped following the target.
+ */
+describe('areForcedMapsEqual', () => {
+  it('sees through a new Map that says the same thing', () => {
+    expect(areForcedMapsEqual(new Map([['main:led', true]]), new Map([['main:led', true]]))).toBe(true)
+  })
+
+  it('reports a different value, a missing key and an extra key', () => {
+    expect(areForcedMapsEqual(new Map([['main:led', true]]), new Map([['main:led', false]]))).toBe(false)
+    expect(areForcedMapsEqual(new Map([['main:led', true]]), new Map())).toBe(false)
+    expect(areForcedMapsEqual(new Map(), new Map([['main:led', true]]))).toBe(false)
   })
 })
