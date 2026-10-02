@@ -139,36 +139,38 @@ Conséquence pour l'option B : la projection est **correcte sans FB utilisateur*
 la session échouera de toute façon sur le compte. À porter dans `ERRATA.md` du dépôt runtime
 (`ERR-nnn`) : c'est un défaut de `plcbuild`, pas de l'éditeur.
 
-**D5 — deux formes de commandes `debug` tuent le CLI avant tout code (mesure du 2026-10-02).**
+**D5 — certaines formes de `debug read` / `debug force` tuent le CLI (mesure du 2026-10-02, ouvert).**
 
-Matrice reproduite (aucune session ouverte : l'indexation n'entre donc pas en jeu) :
+Matrice (aucune session ouverte : l'indexation n'est pas en cause) :
 
 | argv | resultat |
 |---|---|
 | `debug status`, `debug status x`, `debug list-vars x y` | OK (erreur `session_not_found`, sortie 3) |
-| `debug read a`, `debug read a b`, `debug read aaaa bbbb`, `debug read a:b c:d` | OK |
-| `debug read main:a b`, `debug read foo:a b`, `debug read main:b c` | **mort silencieuse**, sortie -1 |
-| `debug force a b`, `debug force main:a` | OK |
-| `debug force main:a 1`, `debug force main:led TRUE`, `debug force --var main:led --value TRUE` | **mort silencieuse** |
-| `debug read b main:a` | OK |
+| `debug read a`, `read a b`, `read aaaa b`, `read aaaaa b`, `read a:b c:d`, `read b main:a` | OK |
+| `debug read main:a b`, `read foo:a b`, `read main:b c`, **`read aa:a b`** | **mort silencieuse**, sortie -1 |
+| `debug force a b` | OK |
+| `debug force main:a 1`, `force main:led TRUE`, `force --var main:led --value TRUE` | **mort silencieuse** |
 
-Ce n'est donc ni le nombre de positionnels, ni l'etat de session, ni les commutateurs Chromium
-(`--no-sandbox --ozone-platform=headless` ne changent rien), et `--enable-logging` n'imprime rien.
+Ce qui est etabli : la forme fautive est un **premier positional contenant `:` avec au moins 4 caracteres**
+(`aa:a`, `foo:a`, `main:a`) **et un second positional** ; sans second positional (`read main:a`) ou avec un
+prefixe court (`a:b c:d`) ou sans `:` (`aaaaa b`) la commande repond normalement. C'est identique sur les deux
+bundles (dev `openplc-cli.dev.js` et `release/app/dist/main/main.js`), aucune sortie stdout/stderr,
+`--enable-logging=stderr --v=1` n'ecrit **rien** (log de 0 octet), et le journal d'evenements Windows ne
+signale rien.
 
-Une build **instrumentee** (journal ecrit en fichier depuis `dispatch` et depuis `runDebug`) montre que
-**le code du CLI n'est jamais atteint** : le journal n'est pas cree, et aucune des trois gardes
-(`main().catch`, `uncaughtException`, `unhandledRejection`) ne parle. La sortie est -1 sans stdout/stderr ;
-une meme invocation rend parfois un code de sortie vide (vue PowerShell) en laissant un process `electron`
-residuel. L'instrumentation a ete retiree (arbre propre) — le defaut est donc anterieur a J3-b.
+**Correction d'une conclusion anterieure** : la build instrumentee qui « ne journalisait jamais » avait son
+propre helper fautif (il avalait son erreur) — **on ne peut donc pas affirmer** que le process meurt avant notre
+code. La these « Electron avorte avant JS » reste ouverte, pas demontree.
 
 Consequence : `force` est inutilisable depuis le CLI et `read` n'accepte pas plusieurs noms ; `read <nom>`,
 `list-vars`, `list`, `open` et `upload` fonctionnent, donc **l'indexation n'est pas en cause** (elle est
-verifiee). Le forcage reste possible depuis l'IHM et par `POST /api/force`.
+verifiee). Le forcage reste possible depuis l'IHM et par `POST /api/force` (J4.2 le reprend desormais a l'ecran).
 
-Prochaine investigation : rejouer la meme invocation sous `--inspect-brk` sur le process principal (pour
-voir si Electron avorte *avant* JS), comparer avec le CLI **packagé** (`openplc-cli`, installe par
-`install-cli`) et sur Linux/CI — `docs/CLI.md` y consigne le CLI comme verifie, ce qui oriente vers une
-interaction Windows (arguments / instance unique).
+Prochaines etapes, dans l'ordre : (1) instrumenter **correctement** le tout premier niveau de `src/main/entry.ts`
+(import de `appendFileSync`, pas un `require` inline — la premiere tentative a casse le bundle) pour trancher
+« avant notre code » vs « dans notre code » ; (2) rejouer sous `--inspect-brk` sur le process principal ;
+(3) comparer avec le CLI **packagé** (`openplc-cli`) et sous Linux/CI, ou `docs/CLI.md` consigne le CLI comme
+verifie — l'ecart Windows serait alors isole.
 
 ### 1.3 État de J1 (livré) et de l'environnement
 
