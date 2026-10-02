@@ -139,15 +139,36 @@ Conséquence pour l'option B : la projection est **correcte sans FB utilisateur*
 la session échouera de toute façon sur le compte. À porter dans `ERRATA.md` du dépôt runtime
 (`ERR-nnn`) : c'est un défaut de `plcbuild`, pas de l'éditeur.
 
-**D5 — `openplc-cli debug force` meurt en silence (mesure du 2026-10-02).**
+**D5 — deux formes de commandes `debug` tuent le CLI avant tout code (mesure du 2026-10-02).**
 
-Toutes les formes echouent pareil — `debug force main:led TRUE`, `debug force --var main:led
---value TRUE`, `debug force main:secondes 42` : aucune sortie, aucun JSON, code de sortie -1
-(processus tue). Un `read` a **plusieurs** noms tombe dans le meme trou, alors que `read <nom>`,
-`list-vars`, `list`, `open` et `upload` fonctionnent. C'est donc la lecture/ecriture de valeur
-et le multi-nom qui sont en cause, **pas l'indexation** (qui est verifiee). A reparer avant de
-se servir du forcage par nom depuis le CLI ; en attendant, le forcage reste possible depuis
-l'IHM et par `POST /api/force`.
+Matrice reproduite (aucune session ouverte : l'indexation n'entre donc pas en jeu) :
+
+| argv | resultat |
+|---|---|
+| `debug status`, `debug status x`, `debug list-vars x y` | OK (erreur `session_not_found`, sortie 3) |
+| `debug read a`, `debug read a b`, `debug read aaaa bbbb`, `debug read a:b c:d` | OK |
+| `debug read main:a b`, `debug read foo:a b`, `debug read main:b c` | **mort silencieuse**, sortie -1 |
+| `debug force a b`, `debug force main:a` | OK |
+| `debug force main:a 1`, `debug force main:led TRUE`, `debug force --var main:led --value TRUE` | **mort silencieuse** |
+| `debug read b main:a` | OK |
+
+Ce n'est donc ni le nombre de positionnels, ni l'etat de session, ni les commutateurs Chromium
+(`--no-sandbox --ozone-platform=headless` ne changent rien), et `--enable-logging` n'imprime rien.
+
+Une build **instrumentee** (journal ecrit en fichier depuis `dispatch` et depuis `runDebug`) montre que
+**le code du CLI n'est jamais atteint** : le journal n'est pas cree, et aucune des trois gardes
+(`main().catch`, `uncaughtException`, `unhandledRejection`) ne parle. La sortie est -1 sans stdout/stderr ;
+une meme invocation rend parfois un code de sortie vide (vue PowerShell) en laissant un process `electron`
+residuel. L'instrumentation a ete retiree (arbre propre) — le defaut est donc anterieur a J3-b.
+
+Consequence : `force` est inutilisable depuis le CLI et `read` n'accepte pas plusieurs noms ; `read <nom>`,
+`list-vars`, `list`, `open` et `upload` fonctionnent, donc **l'indexation n'est pas en cause** (elle est
+verifiee). Le forcage reste possible depuis l'IHM et par `POST /api/force`.
+
+Prochaine investigation : rejouer la meme invocation sous `--inspect-brk` sur le process principal (pour
+voir si Electron avorte *avant* JS), comparer avec le CLI **packagé** (`openplc-cli`, installe par
+`install-cli`) et sur Linux/CI — `docs/CLI.md` y consigne le CLI comme verifie, ce qui oriente vers une
+interaction Windows (arguments / instance unique).
 
 ### 1.3 État de J1 (livré) et de l'environnement
 
