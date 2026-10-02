@@ -453,6 +453,75 @@ Playwright (aucun workflow CI ne le lance ici) :
 - `setup:strucpp` écrase `node_modules/strucpp` : rejouer la suite **après**, jamais en
   s'appuyant sur un run antérieur.
 
+### 4.8 Journaux de la chaine, empreinte des forceurs, arret propre (constat du 2026-10-02)
+
+**Ou sont les journaux.** Trois sources, et une seule piege :
+
+| Source | Chemin | Ce qu'on y trouve |
+|---|---|---|
+| Application (winston) | `%APPDATA%\open-plc-editor\logs\{main,combined,error}.log` | cycle de vie, IPC, updater, erreurs du processus principal |
+| Application (sortie standard) | `%TEMP%\editor-run<N>.log` et `.log.err` | ce qu'Electron jette au demarrage (splash, binaires manquants) |
+| **Cible et runtime** | `GET /api/logs` (anneau ; 876 lignes sur la session du soir), `GET /api/compilation-logs` | demarrage, chargement du blob, MD5, **chaque ordre de forcage**, bruit Modbus |
+
+Le piege : le dossier `logs` est **partage** avec l'installation packagee
+(`%LOCALAPPDATA%\Programs\open-plc-editor`). Les dizaines d'erreurs de `main.log` sont des 404
+de l'**updater de l'app installee**, pas de la session de developpement : ne pas les lire comme
+un defaut du fork.
+
+**Recette de capture** (dossier `_session-<date>` **hors des depots** : ces fichiers ne doivent
+jamais entrer dans un arbre git) :
+
+```powershell
+$login = Invoke-RestMethod -Method Post -ContentType 'application/json' `
+  -Body '{"username":"openplc","password":"openplc"}' 'http://127.0.0.1:8080/api/login'
+$h = @{ Authorization = "Bearer " + $login.access_token }
+$r = Invoke-WebRequest -UseBasicParsing -Headers $h 'http://127.0.0.1:8080/api/logs'
+[IO.File]::WriteAllText("$dest\api\runtime-logs.json", $r.Content,
+  (New-Object System.Text.UTF8Encoding($false)))
+```
+
+Deux details payes une fois chacun : `Invoke-WebRequest` **sans** `-UseBasicParsing` echoue hors
+session interactive (« Windows PowerShell n'est pas en mode interactif » — il veut le moteur IE),
+et un helper nomme `R` entre en collision avec l'alias de `Invoke-History`. `Invoke-RestMethod`
+pour le JSON qu'on relit, `Invoke-WebRequest -UseBasicParsing` pour les octets qu'on archive.
+`/api/logs` rend `{"logs": "<texte>"}` : decouper sur les fins de ligne avant d'indexer, un
+`[-30..-1]` sur la chaine rend 30 **caracteres**.
+
+**L'empreinte des deux forceurs.** Le runtime trace chaque ordre de forcage (FC `0x42`) :
+
+```
+Debug: FC42 force idx=2 flag=1 len=1 first=1    <- forcage, avec valeur     : l'EDITEUR
+Debug: FC42 force idx=2 flag=0 len=0           <- relachement, sans valeur : le BACKEND
+```
+
+`len=0` sur un relachement est la signature du `POST /api/force` du backend
+(`Force(ctx, index, false, nil)`), la ou l'editeur envoie toujours la valeur. C'est ce qui a
+permis de trancher le 2026-10-02 : **les deux emetteurs atteignaient bien la cible**, et le seul
+trou etait l'affichage de l'editeur (P2, corrige en `9c9600414`). Le bruit
+`Server: Client accepted!` / `has closed the connection` en rafale est la boucle de polling de
+l'editeur, une connexion par cycle : normal, a ne pas lire comme une instabilite.
+
+**Arret propre, dans cet ordre :**
+
+1. `POST /api/stop` — reponse `{"status":"stopped"}`, et le runtime **sort seul** : ne pas le
+   tuer, un `Stop-Process` sur `openplc.exe` laisse `core/plc.dll` verrouille pour le prochain
+   backend ;
+2. le backend (`openplc-backend.exe`) ;
+3. l'editeur (`electron.exe` — la racine suffit, ses processus aides suivent).
+
+Verifications de cloture : ports **502, 8080, 8443, 43628, 44818** fermes ; `core/plc.dll`
+ouvrable en ecriture (aucun verrou) ; plus aucun `electron`/`openplc`/`node` residuel ; `git
+status` propre dans les trois depots.
+
+**Defauts cosmetiques releves dans ces journaux** (aucun blocage, a traiter avec J5) :
+
+- le **splash est introuvable dans une app construite** : `ERR_FILE_NOT_FOUND` sur
+  `release/app/src/main/modules/preload/splash-screen/splash.html` — la recette de build ne copie
+  pas cette page, l'ecran de demarrage reste vide ;
+- `arduino-cli` introuvable dans un lancement local (le binaire ne vit que dans un paquet) : bruit
+  attendu, mais il salit chaque demarrage ;
+- les 404 de l'updater decrits plus haut (app installee, dossier de journaux partage).
+
 ## 5. Décisions à prendre (propriétaire : `@micka`)
 
 | # | Décision | Impact | Défaut proposé |
@@ -608,3 +677,10 @@ Playwright (aucun workflow CI ne le lance ici) :
   pas). Mesure du jour, cible en marche : forcer l'index 2 (LED) par `POST /api/force` donne `01` au
   canal de debug et `true` sur `%QX0.0`, et **tient** 7 s plus tard — cible et backend etaient hors de
   cause, c'etait bien l'editeur qui ne regardait pas.
+- **2026-10-02, session « forcage » (P2)** — mesure de bout en bout sur la cible en marche :
+  `POST /api/force` sur l'index 2 (LED) donne `01` au canal de debug **et** `true` sur `%QX0.0`,
+  et **tient** 7 s plus tard ; le journal du runtime montre les ordres des **deux** emetteurs
+  arrivant a la cible (empreinte `len=1` editeur / `len=0` backend, 4.8). Le seul defaut etait donc
+  l'editeur, qui ne lisait le registre du backend qu'a l'ouverture de la session : corrige en
+  `9c9600414` (relecture toutes les 2 s, marques posees **et** retirees, jamais celles de
+  l'editeur). Journaux de la session, empreinte des forceurs et recette d'arret propre : 4.8.
