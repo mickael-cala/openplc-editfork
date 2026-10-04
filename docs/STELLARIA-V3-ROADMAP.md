@@ -529,6 +529,27 @@ status` propre dans les trois depots.
   attendu, mais il salit chaque demarrage ;
 - les 404 de l'updater decrits plus haut (app installee, dossier de journaux partage).
 
+### 4.9 Mesurer un forcage sans passer par l'interface (2026-10-02)
+
+Deux outils, ajoutes apres une soiree de tours en rond ou l'on ne savait jamais *qui* mentait :
+
+- `npm run debug:force-probe -- [--index 2] [--host 127.0.0.1] [--port 502]` conduit le **client et
+  l'encodeur de l'editeur** contre la cible en marche, sans interface, et relit la valeur apres chaque
+  geste. Il imprime d'abord les trames construites (comparables a l'octet pres), puis `before` /
+  `after force true` / `after force false` / `after release`. C'est la **reference** : ce que la cible
+  sert vraiment ;
+- la trace `[force] <cle> idx=<n> bytes=[..] -> accepted|REJECTED by the debug port`, ecrite par le
+  service de forcage dans la **console de l'application**, et les messages explicites qui remplacent
+  les abandons silencieux (`no debug index for this variable`).
+
+Regle de lecture : sonde qui voit la valeur et ecran qui ne suit pas -> le defaut est dans l'editeur ;
+sonde qui ne la voit pas -> transport, cible ou configuration. Et dans le journal du runtime,
+l'empreinte distingue les deux emetteurs (voir 4.8).
+
+Mesure du 2026-10-02 : trames `42 00 00 02 01 00 01 01` (true) et `42 00 00 02 01 00 01 00` (false),
+relectures `01` / `00` / `00`, et un forcage a true encore actif lu `01` **avant** tout geste de la
+sonde -- c'est-a-dire que le forcage de `@micka` tenait deja cote cible.
+
 ## 5. Décisions à prendre (propriétaire : `@micka`)
 
 | # | Décision | Impact | Défaut proposé |
@@ -729,6 +750,10 @@ continu le cache des index a interroger -- voir le journal et le piege en 4.7), 
 place, traces en place, tests ajoutes. La machine est **arretee proprement** (automate -> serveur ->
 application ; `plc.dll` libre, ports 502/8080/8443 fermes) et les journaux du soir sont dans
 `C:\Users\micka\gh\_session-2026-10-02-soir\`.
+
+**Push exceptionnel** accorde par `@micka` le 2026-10-02 au soir et **utilise** :
+`origin/stellaria/v3-only` est a jour (les deux depots voisins restent en local -- leur propre regle
+suspend le push).
 
 **En attente de `@micka` :**
 
